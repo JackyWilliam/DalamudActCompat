@@ -2682,7 +2682,7 @@ async Task ValidateTriggernometryTimingProbeAsync()
                   <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_REPLAY_STALE" />
                 </Actions>
               </Trigger>
-              <Trigger Enabled="true" Id="9d0c3b1e-0f5a-4f0f-8a64-1f2b9a6c0b04" Name="Entity referenced before its snapshot" RegularExpression="ACTCOMPAT_SPAWN:(?&lt;id&gt;4[0-9A-F]{7})" Source="Log">
+              <Trigger Enabled="true" Id="9d0c3b1e-0f5a-4f0f-8a64-1f2b9a6c0b04" Name="Entity referenced before its snapshot" RegularExpression="14:(?&lt;id&gt;4[0-9A-F]{7}):ACTCOMPAT_SPAWN:" Source="Log">
                 <Actions>
                   <Action ActionType="UseTTS" OrderNumber="1" UseTTSTextExpression="ACTCOMPAT_SPAWN_SEEN">
                     <Condition Enabled="true" Grouping="Or">
@@ -2846,8 +2846,15 @@ async Task ValidateTriggernometryTimingProbeAsync()
             await SendLinesAsync(Line("ACTCOMPAT_REFIRE_4", origin.AddMilliseconds(5_300)));
             await SpeakUntilSentinelAsync(2);
 
-            // 2. The game logs an actor one frame before its snapshot reaches the Host.
-            await SendLinesAsync(Line("ACTCOMPAT_SPAWN:40001234:", DateTimeOffset.Now));
+            // 2. The game logs an actor one frame before its snapshot reaches the Host: a cast by a
+            // boss that has just spawned. It has to be a real actor field (StartsCasting's caster);
+            // the wait no longer reads IDs out of arbitrary fields such as chat text.
+            var spawnAt = DateTimeOffset.Now;
+            await SendLinesAsync(new HostLogEvent(
+                spawnAt,
+                $"20|{spawnAt.ToLocalTime():yyyy-MM-ddTHH:mm:ss.fffffffzzz}|40001234|ACTCOMPAT_SPAWN|9C1A|Mechanic|10005678|Player|4.70|",
+                false,
+                $"[{spawnAt.ToLocalTime():HH:mm:ss.fff}] 20 14:40001234:ACTCOMPAT_SPAWN:9C1A:Mechanic:10005678:Player:4.70:"));
             await Task.Delay(80);
             var spawned = CreateTestFfxivSnapshot(includeTarget: true).Combatants
                 .Single(combatant => combatant.Id == 0x10005678) with { Id = 0x40001234 };

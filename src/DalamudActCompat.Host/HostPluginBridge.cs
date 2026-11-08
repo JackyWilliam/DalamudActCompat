@@ -81,6 +81,8 @@ public static partial class HostPluginBridge
             pair => pair.Key,
             pair => pair.Value.ToHashSet(StringComparer.Ordinal),
             StringComparer.OrdinalIgnoreCase);
+        // A new permission set gets its decisions logged afresh (FirstAudit).
+        AuditedDecisions.Clear();
         if (!IsAllowed("triggernometry", "ReadCombatLogs")) ResetTriggernometryLogWaits();
         foreach (var pair in permissions.OrderBy(pair => pair.Key, StringComparer.Ordinal))
         {
@@ -1073,10 +1075,11 @@ public static partial class HostPluginBridge
     {
         if (!IsAllowed("postnamazu", "NativeGameMemory"))
         {
-            // The U6b loop calls this path every 10 ms. Denials remain visible, while successful
-            // authorization is already recorded by ConfigurePermissions and must not flood logs.
-            Console.Error.WriteLine(
-                "permission plugin=postnamazu capability=NativeGameMemory decision=deny");
+            // The U6b loop calls this path every 10 ms: the denial is logged once (FirstAudit),
+            // and successful authorization is already recorded by ConfigurePermissions.
+            if (FirstAudit("postnamazu", "NativeGameMemory", allowed: false))
+                Console.Error.WriteLine(
+                    "permission plugin=postnamazu capability=NativeGameMemory decision=deny");
             throw new UnauthorizedAccessException(
                 "ACT plugin 'postnamazu' is not authorized for capability 'NativeGameMemory'.");
         }
@@ -2060,12 +2063,21 @@ public static partial class HostPluginBridge
         => permissions.TryGetValue(pluginId, out var allowed) &&
            allowed.Contains(capability);
 
+    // Each decision is logged once per Host run. Matcha relays every log line through Demand, so
+    // logging each check wrote several plugin-log lines a second. Permissions that change get a
+    // new key and are logged again.
+    private static readonly ConcurrentDictionary<string, byte> AuditedDecisions = new(StringComparer.Ordinal);
+
+    internal static bool FirstAudit(string pluginId, string capability, bool allowed)
+        => AuditedDecisions.TryAdd($"{pluginId}|{capability}|{allowed}", 0);
+
     private static bool AuditDecision(string pluginId, string capability)
     {
         var allowed = IsAllowed(pluginId, capability);
-        Console.WriteLine(
-            $"permission plugin={pluginId} capability={capability} decision=" +
-            (allowed ? "allow" : "deny"));
+        if (FirstAudit(pluginId, capability, allowed))
+            Console.WriteLine(
+                $"permission plugin={pluginId} capability={capability} decision=" +
+                (allowed ? "allow" : "deny"));
         return allowed;
     }
 
@@ -2073,15 +2085,16 @@ public static partial class HostPluginBridge
     {
         if (IsAllowed(pluginId, capability))
         {
-            Console.WriteLine(
-                $"permission plugin={pluginId} capability={capability} decision=allow");
+            if (FirstAudit(pluginId, capability, allowed: true))
+                Console.WriteLine(
+                    $"permission plugin={pluginId} capability={capability} decision=allow");
             return;
         }
 
-        Console.Error.WriteLine(
-            $"permission plugin={pluginId} capability={capability} decision=deny");
-        throw new UnauthorizedAccessException(
-            $"ACT plugin '{pluginId}' is not authorized for capability '{capability}'.");
+        if (FirstAudit(pluginId, capability, allowed: false))
+            Console.Error.WriteLine(
+                $"permission plugin={pluginId} capability={capability} decision=deny");
+        throw new HostCapabilityDeniedException(pluginId, capability);
     }
 
     private static void ClipboardWorker()
@@ -2207,4 +2220,13 @@ internal sealed class ConsoleActLogger : IActLogger
 
     public void Warning(string message)
         => Console.Error.WriteLine(message);
+}
+
+// Thrown by HostPluginBridge.Demand. Still an UnauthorizedAccessException for every caller that
+// already handles one; it also says which capability, so a plugin that cannot start without it
+// is reported as needing that permission (LegacyPluginRuntime, HostCapabilityDenial).
+public sealed class HostCapabilityDeniedException(string pluginId, string capability)
+    : UnauthorizedAccessException($"ACT plugin '{pluginId}' is not authorized for capability '{capability}'.")
+{
+    public string Capability { get; } = capability;
 }

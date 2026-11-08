@@ -2075,5 +2075,7 @@
   "Splash animation": "Startanimation",
   "On the first open after each game launch": "Beim ersten Öffnen nach jedem Spielstart",
   "Every time the control center opens": "Bei jedem Öffnen des Kontrollzentrums",
-  "Click the animation to skip it.": "Ein Klick auf die Animation überspringt sie."
+  "Click the animation to skip it.": "Ein Klick auf die Animation überspringt sie.",
+  "Needs permission": "Berechtigung nötig",
+  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "Benötigt die Berechtigung „{0}“ zum Starten: unter Berechtigungen einschalten, dann startet die Erweiterung neu."
 }

@@ -152,6 +152,25 @@ public sealed record HostPluginStage(
     string Detail,
     DateTimeOffset UpdatedAt);
 
+// An extension that failed to start because the player has not granted one of its capabilities
+// (SilverDasher without NativeGameMemory under the safe defaults). The stage detail then carries
+// only that capability, so the extension row names the permission to switch on instead of
+// showing the stack trace; the full exception still goes to the Host log.
+public static class HostCapabilityDenial
+{
+    private const string Prefix = "missing-capability:";
+
+    public static string Format(string capability) => Prefix + capability;
+
+    public static bool TryParse(string? detail, out string capability)
+    {
+        capability = detail is not null && detail.StartsWith(Prefix, StringComparison.Ordinal)
+            ? detail[Prefix.Length..]
+            : string.Empty;
+        return capability.Length > 0;
+    }
+}
+
 public sealed record HostHealth(
     string State,
     string Detail,

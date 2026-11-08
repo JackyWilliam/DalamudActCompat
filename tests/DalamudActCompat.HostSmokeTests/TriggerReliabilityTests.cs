@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using DalamudActCompat.Host;
+using DalamudActCompat.Protocol;
 
 // Host-side regressions for trigger reliability. Each case reports independently so one
 // run shows every failing mechanism instead of stopping at the first assertion.
@@ -32,6 +33,16 @@ internal static class TriggerReliabilityTests
         await Case("referenced-entity-waits-for-snapshot", () =>
         {
             ReferencedEntityWaitsForSnapshot();
+            return Task.CompletedTask;
+        });
+        await Case("value-fields-are-not-actors", () =>
+        {
+            ValueFieldsAreNotActors();
+            return Task.CompletedTask;
+        });
+        await Case("capability-denials-named-and-logged-once", () =>
+        {
+            CapabilityDenialsAreNamedAndLoggedOnce();
             return Task.CompletedTask;
         });
         await Case("log-time-follows-game-time", () =>
@@ -94,6 +105,78 @@ internal static class TriggerReliabilityTests
         zone = 1240;
         gate.Pump();
         Require(delivered.Count == 4 && !gate.HasPending, "a territory change must discard lines held for old actors");
+    }
+
+    // 1.0.0.1 read every 4xxxxxxx field as an actor, so status timers (floats: 41A00000 = 20 s),
+    // damage, gauge and memory values held TN's log stream for 200 ms each, several times a second
+    // in combat. Only actor fields may wait; a new actor in one still does.
+    private static void ValueFieldsAreNotActors()
+    {
+        long clock = 0;
+        var seen = new HashSet<uint> { 0x10001234, 0x40001234 };
+        var delivered = new List<string>();
+        var warnings = new List<string>();
+        var gate = new TriggernometryActorControlGate(() => 1238, _ => false,
+            (_, line, _) => delivered.Add(line), warnings.Add, () => clock, entitySeen: seen.Contains);
+        string[] values =
+        [
+            "[20:00:00.000] 38 26:10001234:Player:5A0A0000:98112:98112:10000:10000:0:0:100.00:100.00:0.00:0.00:0A1F0000:41A00000:E0000000:0A200000:4199EB83:10001234:",
+            "[20:00:00.010] 37 25:10001234:Player:0000A1B2:98112:98112:10000:10000:0:0:100.00:100.00:0.00:0.00:0:0A1F0000:426FD1EC:10001234:",
+            "[20:00:00.020] 21 15:10001234:Player:9C1B:Hit:40001234:Boss:750003:49790000:1B:4A3E0000:",
+            "[20:00:00.030] 31 1F:10001234:4A3E0000:41000000:0:0:",
+            "[20:00:00.040] 261 105:Change:40001234:Heading:4A0D5B40:",
+            "[20:00:00.050] 26 1A:0A1F:Effect:20.00:10001234:Player:40001234:Boss:01:",
+        ];
+        foreach (var line in values) gate.Accept(false, line, "Z");
+        Require(delivered.SequenceEqual(values) && !gate.HasPending && warnings.Count == 0,
+            "a status timer, damage, gauge or memory value was held as an unseen actor");
+
+        const string newTarget = "[20:00:01.000] 26 1A:0A1F:Effect:20.00:10001234:Player:4000ABCD:Add:01:";
+        const string newSpawn = "[20:00:01.010] 272 110:4000BCDE:E0000000:0000:01:";
+        gate.Accept(false, newTarget, "Z");
+        gate.Accept(false, newSpawn, "Z");
+        Require(delivered.Count == values.Length && gate.HasPending, "a new actor in an actor field did not wait for its snapshot");
+        clock = 30; seen.Add(0x4000ABCD); seen.Add(0x4000BCDE); gate.Pump();
+        Require(delivered.Skip(values.Length).SequenceEqual([newTarget, newSpawn]) && !gate.HasPending && warnings.Count == 0,
+            "the snapshot did not release lines held for real actors");
+    }
+
+    // Matcha checks ReadCombatLogs for every relayed line, and 1.0.0.1 logged every check; and
+    // SilverDasher without native memory showed its whole stack trace instead of the permission.
+    // "NoSuchCapability" is never granted, so this leaves the Host's real permissions alone.
+    private static void CapabilityDenialsAreNamedAndLoggedOnce()
+    {
+        var errors = new StringWriter();
+        var original = Console.Error;
+        Console.SetError(errors);
+        var denials = new List<Exception>();
+        try
+        {
+            for (var i = 0; i < 3; i++)
+            {
+                try { HostPluginBridge.DemandMatchaCapability("NoSuchCapability"); }
+                catch (Exception ex) { denials.Add(ex); }
+            }
+        }
+        finally
+        {
+            Console.SetError(original);
+        }
+
+        Require(denials.Count == 3 && denials.All(ex => ex is HostCapabilityDeniedException { Capability: "NoSuchCapability" } and UnauthorizedAccessException),
+            "a denied capability was not reported as a named UnauthorizedAccessException");
+        Require(errors.ToString().Split('\n').Count(line => line.Contains("capability=NoSuchCapability", StringComparison.Ordinal)) == 1,
+            "a repeated permission decision was logged more than once");
+        Require(HostPluginBridge.FirstAudit("audit-test", "X", true) && !HostPluginBridge.FirstAudit("audit-test", "X", true) &&
+                HostPluginBridge.FirstAudit("audit-test", "X", false), "a changed decision was not logged again");
+
+        // InitPlugin runs through reflection; the row needs the capability, not the stack trace.
+        var wrapped = new System.Reflection.TargetInvocationException(new HostCapabilityDeniedException("silverdasher", "NativeGameMemory"));
+        Require(LegacyPluginRuntime.DeniedCapability(wrapped) == "NativeGameMemory" &&
+                LegacyPluginRuntime.DeniedCapability(new InvalidOperationException("other")) is null,
+            "an InitPlugin failure did not name the missing capability");
+        Require(HostCapabilityDenial.TryParse(HostCapabilityDenial.Format("NativeGameMemory"), out var parsed) && parsed == "NativeGameMemory" &&
+                !HostCapabilityDenial.TryParse("System.Exception: boom", out _), "the stage detail did not round-trip the capability");
     }
 
     private static void LogTimeFollowsGameTime()
