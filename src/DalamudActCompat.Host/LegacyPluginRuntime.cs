@@ -650,8 +650,19 @@ internal sealed class LegacyPluginRuntime : IDisposable
         {
             Console.Error.WriteLine($"Legacy plugin '{id}' failed out-of-process: {ex}");
             HostPluginBridge.ReportException(id, "InitPlugin", ex);
-            SetStage(id, "InitPlugin", "failed", ex.ToString());
+            // A permission the player has not granted is reported as just that permission, so
+            // the extension row can say what to switch on; the full exception is logged above.
+            SetStage(id, "InitPlugin", "failed",
+                DeniedCapability(ex) is { } capability ? HostCapabilityDenial.Format(capability) : ex.ToString());
         }
+    }
+
+    // InitPlugin runs through reflection, so the denial arrives wrapped (TargetInvocationException).
+    internal static string? DeniedCapability(Exception? exception)
+    {
+        for (; exception is not null; exception = exception.InnerException)
+            if (exception is HostCapabilityDeniedException denied) return denied.Capability;
+        return null;
     }
 
     private void LoadManifestPlugins()

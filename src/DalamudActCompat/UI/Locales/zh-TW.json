@@ -2075,5 +2075,7 @@
   "Splash animation": "開場動畫",
   "On the first open after each game launch": "每次啟動遊戲後首次開啟時播放",
   "Every time the control center opens": "每次開啟控制中心都播放",
-  "Click the animation to skip it.": "播放時點一下即可跳過。"
+  "Click the animation to skip it.": "播放時點一下即可跳過。",
+  "Needs permission": "需要授權",
+  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "需要「{0}」權限才能啟動：在「權限」裡開啟後會自動重新啟動擴充功能。"
 }

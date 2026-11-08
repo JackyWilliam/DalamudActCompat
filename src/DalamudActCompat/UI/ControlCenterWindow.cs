@@ -17,6 +17,7 @@ using DalamudActCompat.Infrastructure.Resources;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
+using DalamudActCompat.Protocol;
 using DalamudActCompat.Quality;
 using DalamudActCompat.UI.Kit;
 using System.Numerics;
@@ -1207,6 +1208,16 @@ public sealed partial class ControlCenterWindow : Window
         var health = host.PluginHealth?.FirstOrDefault(candidate => Same(candidate.PluginId));
         if (host.State is HostSupervisorState.Faulted or HostSupervisorState.CircuitOpen)
             return (text.Get("故障", "Faulted"), PillTone.Error, text.Get("所在 Host 已停止响应；可在运行状态中重启 Host。", "Its Host stopped responding; restart the Host from Runtime status."));
+        // Under the safe defaults an extension that needs a capability to start (SilverDasher:
+        // native game memory) fails in InitPlugin; name the permission rather than the stack trace.
+        if (failed is not null && HostCapabilityDenial.TryParse(failed.Detail, out var capability) &&
+            Enum.TryParse<ActCapability>(capability, out var missing))
+        {
+            var permission = ActCapabilityDisplay.Label(missing, text);
+            return (text.Get("需要授权", "Needs permission"), PillTone.Warn,
+                text.Format($"需要「{permission}」权限才能启动：在「权限」里打开后会自动重启扩展。",
+                    $"Needs the \"{permission}\" permission to start: turn it on under Permissions and the extension restarts."));
+        }
         if (failed is not null) return (text.Get("故障", "Faulted"), PillTone.Error, $"{failed.Stage}: {failed.Detail}");
         if (health?.CircuitOpen == true)
             return (text.Get("故障", "Faulted"), PillTone.Error, text.Get("事件处理多次超时，已暂停；重启 Host 后恢复。", "Event handling timed out repeatedly and is paused; restart the Host to resume."));

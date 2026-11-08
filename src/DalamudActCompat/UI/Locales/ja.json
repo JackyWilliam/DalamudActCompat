@@ -2075,5 +2075,7 @@
   "Splash animation": "起動アニメーション",
   "On the first open after each game launch": "ゲーム起動後、最初に開いたときに再生",
   "Every time the control center opens": "コントロールセンターを開くたびに再生",
-  "Click the animation to skip it.": "再生中にクリックするとスキップできます。"
+  "Click the animation to skip it.": "再生中にクリックするとスキップできます。",
+  "Needs permission": "権限が必要",
+  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "起動には「{0}」の権限が必要です。「権限」でオンにすると拡張機能が自動で再起動します。"
 }
