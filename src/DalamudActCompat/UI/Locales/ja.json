@@ -2071,5 +2071,9 @@
   "ACT extensions and permissions": "ACT 拡張機能と権限",
   "Account, cloud sync and recovery": "アカウント、クラウド同期と復旧",
   "Chat commands": "チャットコマンド",
-  "{0} {1:N0} · share {2:0.0}% · KO {3}": "{0} {1:N0} · 割合 {2:0.0}% · 戦闘不能 {3}"
+  "{0} {1:N0} · share {2:0.0}% · KO {3}": "{0} {1:N0} · 割合 {2:0.0}% · 戦闘不能 {3}",
+  "Splash animation": "起動アニメーション",
+  "On the first open after each game launch": "ゲーム起動後、最初に開いたときに再生",
+  "Every time the control center opens": "コントロールセンターを開くたびに再生",
+  "Click the animation to skip it.": "再生中にクリックするとスキップできます。"
 }

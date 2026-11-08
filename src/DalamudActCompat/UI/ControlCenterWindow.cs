@@ -2327,6 +2327,7 @@ public sealed partial class ControlCenterWindow : Window
         DactUi.BeginCard("settings-general", text.Get("通用", "General"));
         changed |= UiLanguageSelector.DrawField(configuration, text);
         changed |= DrawSearchShortcutField();
+        changed |= DrawSplashAnimationField();
         var showLauncher = configuration.ShowLauncherButton;
         if (DactUi.ToggleRow(text.Get("显示 ACT 快捷按钮", "Show ACT quick button"), ref showLauncher,
                 text.Get("左键打开控制中心、右键显示或隐藏战斗统计、按住中键拖动。", "Left-click opens the control center, right-click shows or hides the Combat Meter, hold the middle button to move it.")))
@@ -2367,6 +2368,24 @@ public sealed partial class ControlCenterWindow : Window
             DrawCombatQuality();
         }
         DactUi.EndCard();
+        return changed;
+    }
+
+    // 开屏动画 (user request): every open, the first open after each game launch (1.0's behaviour
+    // and the default), or off. Items follow SplashAnimationMode's order.
+    private bool DrawSplashAnimationField()
+    {
+        string[] modes =
+        [
+            text.Get("每次启动游戏后首次打开时播放", "On the first open after each game launch"),
+            text.Get("每次打开控制中心都播放", "Every time the control center opens"),
+            text.Get("关闭", "Off"),
+        ];
+        DactUi.BeginField(text.Get("开屏动画", "Splash animation"));
+        var mode = Math.Clamp((int)configuration.SplashAnimation, 0, modes.Length - 1);
+        var changed = DactUi.Select("splash-animation", modes, ref mode) && mode != (int)configuration.SplashAnimation;
+        if (changed) configuration.SplashAnimation = (SplashAnimationMode)mode;
+        DactUi.EndField(text.Get("播放时点一下即可跳过。", "Click the animation to skip it."));
         return changed;
     }
 

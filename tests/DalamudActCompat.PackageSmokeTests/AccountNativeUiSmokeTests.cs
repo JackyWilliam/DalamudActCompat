@@ -6,6 +6,7 @@ using Dalamud.Bindings.ImGui;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
+using Newtonsoft.Json;
 
 internal static class AccountNativeUiSmokeTests
 {
@@ -123,6 +124,34 @@ internal static class AccountNativeUiSmokeTests
                 Check(settled.Count == 1, $"Authentication form {mode} at {scale * 100:0}%, height {height}, kept moving: {string.Join(" | ", settled)}");
             }
             io.FontGlobalScale = 1; size = new(992, 610);
+
+            // 开屏动画 setting: 启动游戏后首次 plays on the launch's first open only, 每次打开 also on
+            // every reopen, 关闭 never; within one open the next frame never restarts it.
+            var splashPlayed = typeof(ControlCenterWindow).GetField("splashPlayedThisSession", BindingFlags.Static | BindingFlags.NonPublic)!;
+            var splashStarted = typeof(ControlCenterWindow).GetField("splashStartedAt", hidden)!;
+            var beginSplash = typeof(ControlCenterWindow).GetMethod("BeginSplashIfFirstOpen", hidden)!;
+            Set("configuration", config);
+            bool Plays(SplashAnimationMode mode, bool firstOfLaunch, bool reopened)
+            {
+                config.SplashAnimation = mode;
+                splashPlayed.SetValue(null, !firstOfLaunch);
+                splashStarted.SetValue(window, -1d);
+                if (reopened) window.OnOpen();
+                beginSplash.Invoke(window, null);
+                var played = (double)splashStarted.GetValue(window)! >= 0;
+                splashStarted.SetValue(window, -1d);
+                beginSplash.Invoke(window, null);
+                Check((double)splashStarted.GetValue(window)! < 0, $"Splash {mode} restarted on the next frame of the same open.");
+                return played;
+            }
+            Check(Plays(SplashAnimationMode.FirstOpenPerLaunch, true, true) && !Plays(SplashAnimationMode.FirstOpenPerLaunch, false, true),
+                "Splash on first open per launch played on a reopen or not at all.");
+            Check(Plays(SplashAnimationMode.EveryOpen, true, false) && Plays(SplashAnimationMode.EveryOpen, false, true) &&
+                  !Plays(SplashAnimationMode.EveryOpen, false, false), "Splash on every open missed a reopen or replayed without one.");
+            Check(!Plays(SplashAnimationMode.Off, true, true), "Splash played while switched off.");
+            Check(JsonConvert.DeserializeObject<PluginConfiguration>("{}")!.SplashAnimation == SplashAnimationMode.FirstOpenPerLaunch,
+                "A configuration written before the splash setting did not keep the 1.0 splash behaviour.");
+            splashPlayed.SetValue(null, true);
 
             Set("cloudAuthenticationPage", Enum.Parse(page, "Login"));
             Set("cloudUsername", "keyboard_user"); Set("cloudPassword", "fixture-password");

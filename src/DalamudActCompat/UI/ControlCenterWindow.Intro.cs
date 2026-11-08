@@ -2,6 +2,7 @@ using System.Numerics;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Textures;
 using DalamudActCompat.Infrastructure.Cloud;
+using DalamudActCompat.Plugin;
 using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
@@ -57,10 +58,26 @@ public sealed partial class ControlCenterWindow
 
     private bool SplashActive => splashStartedAt >= 0;
 
+    // Set when the window opens again (OnOpen); 开屏动画 = 每次打开 plays on it.
+    private bool splashReopened;
+
+    public override void OnOpen() => splashReopened = true;
+
     private void BeginSplashIfFirstOpen()
     {
-        if (splashPlayedThisSession || DactMotion.Disabled) return;
+        // The first open of this game launch is used up whatever the setting, so switching to
+        // 启动游戏后首次 later in the session does not replay it on the next open.
+        var firstOpen = !splashPlayedThisSession;
+        var reopened = splashReopened;
         splashPlayedThisSession = true;
+        splashReopened = false;
+        var play = configuration.SplashAnimation switch
+        {
+            SplashAnimationMode.EveryOpen => firstOpen || reopened,
+            SplashAnimationMode.Off => false,
+            _ => firstOpen,
+        };
+        if (!play || DactMotion.Disabled || SplashActive) return;
         splashStartedAt = splashRequestedAt = ImGui.GetTime();
         splashRevealed = false;
     }

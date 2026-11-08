@@ -2071,5 +2071,9 @@
   "ACT extensions and permissions": "Extensions ACT et autorisations",
   "Account, cloud sync and recovery": "Compte, synchro cloud et récupération",
   "Chat commands": "Commandes de chat",
-  "{0} {1:N0} · share {2:0.0}% · KO {3}": "{0} {1:N0} · part {2:0.0}% · K.-O. {3}"
+  "{0} {1:N0} · share {2:0.0}% · KO {3}": "{0} {1:N0} · part {2:0.0}% · K.-O. {3}",
+  "Splash animation": "Animation d'ouverture",
+  "On the first open after each game launch": "À la première ouverture après chaque lancement du jeu",
+  "Every time the control center opens": "À chaque ouverture du centre de contrôle",
+  "Click the animation to skip it.": "Cliquez sur l'animation pour la passer."
 }

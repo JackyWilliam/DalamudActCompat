@@ -2071,5 +2071,9 @@
   "ACT extensions and permissions": "ACT 擴充套件與權限",
   "Account, cloud sync and recovery": "帳號、雲端同步與找回",
   "Chat commands": "聊天命令",
-  "{0} {1:N0} · share {2:0.0}% · KO {3}": "{0} {1:N0} · 佔比 {2:0.0}% · 死亡 {3}"
+  "{0} {1:N0} · share {2:0.0}% · KO {3}": "{0} {1:N0} · 佔比 {2:0.0}% · 死亡 {3}",
+  "Splash animation": "開場動畫",
+  "On the first open after each game launch": "每次啟動遊戲後首次開啟時播放",
+  "Every time the control center opens": "每次開啟控制中心都播放",
+  "Click the animation to skip it.": "播放時點一下即可跳過。"
 }
