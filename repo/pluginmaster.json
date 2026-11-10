@@ -17,7 +17,7 @@
   "DownloadLinkTesting": null,
   "DownloadLinkUpdate": "https://github.com/JackyWilliam/DalamudActCompat/releases/download/v1.0.0.4/DalamudActCompat-core.zip",
   "LastUpdate": 1794308526935,
-  "Changelog": "DACT 1.0.0.4：适配 7.58（国服/国际服）——修复游戏更新后 ACT 解析器无法启动、战斗统计/日志/宝宝椅等全部没有数据的问题；同步 IINACT 2.10.3.12、OverlayPlugin 0.19.112 与 7.58 网络事件表，抹茶、银山雀儿的事件映射更新到 7.58。7.58 的官方解混淆配置还没发布，暂用与上游相同的兼容方式，启动时会出现「ACT 网络兼容性警告」：战斗解析正常，但新日志的 FF Logs 排名有效性暂不保证。抹茶的 FATE/跨服排队提示和银山雀儿的 FATE 功能要等上游公开 7.58 数据后恢复。更新后请完整重启游戏。",
+  "Changelog": "DACT 1.0.0.4：适配 7.58（国服/国际服）——修复游戏更新后 ACT 解析器无法启动、战斗统计/日志/宝宝椅等全部没有数据的问题；同步 IINACT 2.10.3.12、OverlayPlugin 0.19.112 与 7.58 网络事件表，抹茶、银山雀儿的事件映射更新到 7.58。7.58 的官方解混淆配置还没发布，暂用与上游相同的兼容方式，启动时会出现「ACT 网络兼容性警告」：战斗解析正常，但新日志的 FF Logs 排名有效性暂不保证。抹茶的 FATE/跨服排队提示和银山雀儿的 FATE 功能要等上游公开 7.58 数据后恢复。另修复悬浮窗配置缺少 WebSocket 地址时解析器启动失败（提示 OverlayPlugin WebSocket server could not be started）的问题。更新后请完整重启游戏。",
   "CanUnloadAsync": true,
   "IconUrl": "https://raw.githubusercontent.com/JackyWilliam/DalamudActCompat/main/src/DalamudActCompat/images/icon.png"
 },

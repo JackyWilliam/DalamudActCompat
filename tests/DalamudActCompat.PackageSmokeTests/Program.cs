@@ -365,6 +365,7 @@ try
     ValidateOverlayInitialStateEvents();
     await ValidateOverlayWebSocketFatalAcceptRecoveryAsync();
     ValidateHtmlOverlayDefaults();
+    OverlayConfigEndpointSmokeTests.Run(testRoot);
     OverlayHotkeySmokeTests.Run();
     await DisplayOptionsSmokeTests.RunAsync();
     if (string.Equals(
