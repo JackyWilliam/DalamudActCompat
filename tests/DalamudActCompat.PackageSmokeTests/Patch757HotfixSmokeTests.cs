@@ -1,7 +1,6 @@
 using System.Reflection;
 using IINACT.Network;
 using Machina.FFXIV;
-using Machina.FFXIV.Headers.Opcodes;
 using Unscrambler;
 using Unscrambler.Constants;
 using Unscrambler.Unscramble.Versions;
@@ -46,27 +45,9 @@ internal static class Patch757HotfixSmokeTests
             Require(regionalPolicy.Invoke(null, [GameRegion.Chinese, hotfix, size]) is false,
                 "An unverified CN 7.57h build was treated as a verified regional profile.");
 
-        // Machina parses the opcodes Unscrambler restores, so both must describe the same client.
-        var mapping = new Dictionary<string, string>
-        {
-            ["PlayerSpawn"] = "PlayerSpawn", ["NpcSpawn"] = "NpcSpawn", ["NpcSpawn2"] = "NpcSpawn2",
-            ["ActionEffect01"] = "Ability1", ["ActionEffect08"] = "Ability8",
-            ["ActionEffect16"] = "Ability16", ["ActionEffect24"] = "Ability24", ["ActionEffect32"] = "Ability32",
-            ["StatusEffectList"] = "StatusEffectList", ["StatusEffectList3"] = "StatusEffectList3",
-            ["ActorControl"] = "ActorControl", ["ActorCast"] = "ActorCast",
-        };
-        var previousRegion = OpcodeManager.Instance.GameRegion;
-        try
-        {
-            OpcodeManager.Instance.SetRegion(GameRegion.Global);
-            Require(mapping.All(pair => bundled.ObfuscatedOpcodes[pair.Key] == OpcodeManager.Instance.CurrentOpcodes[pair.Value]),
-                "Unscrambler and Machina disagree on Global 7.57h packets.");
-        }
-        finally
-        {
-            OpcodeManager.Instance.SetRegion(previousRegion);
-        }
-        Console.WriteLine("7.57h Global: published Unscrambler profile, bundled-profile selection, CN boundary and Machina alignment passed.");
+        // Global has moved on to 7.58; Machina/Unscrambler alignment for the live client is
+        // owned by Patch758SmokeTests. The 7.57h profile itself stays bundled and checked above.
+        Console.WriteLine("7.57h Global: published Unscrambler profile, bundled-profile selection and CN boundary passed.");
     }
 
     private static void Require(bool condition, string message)

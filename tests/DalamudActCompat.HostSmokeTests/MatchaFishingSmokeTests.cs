@@ -107,9 +107,7 @@ internal sealed record MatchaFishingOpcodes(
     ushort FishCaught,
     ushort InitZone)
 {
-    public static MatchaFishingOpcodes China757 { get; } =
-        new(0x0256, 0x0324, 0x01E6, 0x02CE, 0x0368, 0x00EB, 0x03CB, 0x02CC);
-
-    public static MatchaFishingOpcodes Global757Hotfix { get; } =
-        new(0x00B4, 0x0081, 0x0101, 0x00D4, 0x037D, 0x0250, 0x006A, 0x009C);
+    // CN and Global share the 7.58 build (FFXIVOpcodes PR #300 a0ffb40).
+    public static MatchaFishingOpcodes Patch758 { get; } =
+        new(0x020B, 0x0108, 0x00A9, 0x015D, 0x0235, 0x01DE, 0x0127, 0x00AB);
 }

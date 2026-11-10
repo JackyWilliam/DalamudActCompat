@@ -164,76 +164,46 @@ public static partial class LegacyAssemblyRewriter
                              throwOnError: true)!
                          ?? throw new TypeLoadException(
                              "Matcha opcode enum is missing.");
-        var china757 = new Dictionary<ushort, string>
+        // 7.58 shipped CN and Global as the same 2026.11.03 build with identical opcodes
+        // (FFXIVOpcodes PR #300 a0ffb40: all 182 shared CN/Global entries match). Values use
+        // FFXIVOpcodes' names AirshipTimers, SubmarineTimers, CFNotify and MiniCactpotInit
+        // for Matcha's legacy names. CEDirector also matches OverlayPlugin 0.19.112 (622).
+        // FateInfo and WorldVisitQueue have no published 7.58 value; a stale 7.57 entry
+        // would parse unrelated packets, so both stay unmapped until one is published.
+        var patch758 = new Dictionary<ushort, string>
         {
-            [0x0198] = "ActorControl",
-            [0x01E6] = "ActorControlSelf",
-            [0x020A] = "CEDirector",
-            [0x0178] = "CompanyAirshipStatus",
-            [0x039C] = "CompanySubmersibleStatus",
-            [0x028A] = "ContentFinderNotifyPop",
+            [0x02DF] = "ActorControl",
+            [0x00A9] = "ActorControlSelf",
+            [0x026E] = "CEDirector",
+            [0x014F] = "CompanyAirshipStatus",
+            [0x0260] = "CompanySubmersibleStatus",
+            [0x03BF] = "ContentFinderNotifyPop",
             // Matcha uses this legacy name for MiniCactpotInit, not EventPlay32.
-            [0x01FE] = "ResumeEventScene32",
-            [0x0256] = "EventPlay",
-            [0x0286] = "EventStart",
-            [0x019C] = "Examine",
-            [0x0259] = "FateInfo",
-            [0x02CC] = "InitZone",
-            [0x032D] = "InventoryTransaction",
-            [0x00D1] = "ItemInfo",
-            [0x0234] = "MarketBoardItemListing",
-            [0x010D] = "MarketBoardItemListingCount",
-            [0x011E] = "MarketBoardItemListingHistory",
-            [0x8248] = "MarketBoardRequestItemListingInfo",
-            [0x0114] = "NpcSpawn",
-            [0x0302] = "PlayerSetup",
-            [0x0265] = "PlayerSpawn",
-            [0x0367] = "SubmarineStatusList",
-            [0x007C] = "WorldVisitQueue",
-            [0x0324] = "EventPlay4",
-            [0x00EB] = "SystemLogMessage",
-            [0x03CB] = "FishCaught",
-            [0x02CE] = "StatusEffectList",
-            [0x8368] = "ClientTrigger",
-        };
-        // Global's 7.57h hotfix (2026.10.16) reshuffled every opcode while CN stays on 7.57.
-        // Values come from FFXIVOpcodes d85eaeb under Matcha's names (AirshipTimers,
-        // SubmarineTimers, CFNotify and MiniCactpotInit there). FateInfo and WorldVisitQueue
-        // have no published 7.57h value; a stale 7.57 entry would parse unrelated packets.
-        var global757Hotfix = new Dictionary<ushort, string>
-        {
-            [0x0229] = "ActorControl",
-            [0x0101] = "ActorControlSelf",
-            [0x034F] = "CEDirector",
-            [0x032E] = "CompanyAirshipStatus",
-            [0x011A] = "CompanySubmersibleStatus",
-            [0x0117] = "ContentFinderNotifyPop",
-            [0x0146] = "ResumeEventScene32",
-            [0x00B4] = "EventPlay",
-            [0x0078] = "EventStart",
-            [0x019E] = "Examine",
-            [0x009C] = "InitZone",
-            [0x01C9] = "InventoryTransaction",
-            [0x0239] = "ItemInfo",
-            [0x0131] = "MarketBoardItemListing",
-            [0x00FF] = "MarketBoardItemListingCount",
-            [0x02DA] = "MarketBoardItemListingHistory",
-            [0x80F2] = "MarketBoardRequestItemListingInfo",
-            [0x017D] = "NpcSpawn",
-            [0x02A6] = "PlayerSetup",
-            [0x017C] = "PlayerSpawn",
-            [0x0166] = "SubmarineStatusList",
-            [0x0081] = "EventPlay4",
-            [0x0250] = "SystemLogMessage",
-            [0x006A] = "FishCaught",
-            [0x00D4] = "StatusEffectList",
-            [0x837D] = "ClientTrigger",
+            [0x03B1] = "ResumeEventScene32",
+            [0x020B] = "EventPlay",
+            [0x039F] = "EventStart",
+            [0x0289] = "Examine",
+            [0x00AB] = "InitZone",
+            [0x033D] = "InventoryTransaction",
+            [0x03DA] = "ItemInfo",
+            [0x00B5] = "MarketBoardItemListing",
+            [0x0265] = "MarketBoardItemListingCount",
+            [0x01EB] = "MarketBoardItemListingHistory",
+            [0x83C7] = "MarketBoardRequestItemListingInfo",
+            [0x0176] = "NpcSpawn",
+            [0x01AE] = "PlayerSetup",
+            [0x02FC] = "PlayerSpawn",
+            [0x00F2] = "SubmarineStatusList",
+            [0x0108] = "EventPlay4",
+            [0x01DE] = "SystemLogMessage",
+            [0x0127] = "FishCaught",
+            [0x015D] = "StatusEffectList",
+            [0x8235] = "ClientTrigger",
         };
 
         // Normalize older installed builds as well as the bundled DLL without changing its
-        // public ABI. CN 7.57 values come from Matcha 0a5fb86 and FFXIVOpcodes be69b56. The
-        // ClientTrigger high bit encodes direction and must survive normalization.
-        foreach (var (region, verified) in new[] { ("Global", global757Hotfix), ("China", china757) })
+        // public ABI. The ClientTrigger high bit encodes direction and must survive normalization.
+        foreach (var (region, verified) in new[] { ("Global", patch758), ("China", patch758) })
         {
             var field = storageType.GetField(region, BindingFlags.Public | BindingFlags.Static)
                         ?? throw new MissingFieldException(storageType.FullName, region);

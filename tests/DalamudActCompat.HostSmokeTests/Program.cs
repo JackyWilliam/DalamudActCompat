@@ -4296,69 +4296,39 @@ void ValidateMatchaAssemblyContract(string packagePath)
                                 throwOnError: true)!
                             ?? throw new TypeLoadException(
                                 "Cafe.Matcha.Constant.OpcodeStorage");
-        var expectedChinaOpcodes = new Dictionary<ushort, string>
+        // CN and Global share the 7.58 build; values come from FFXIVOpcodes PR #300 (a0ffb40).
+        // FateInfo and WorldVisitQueue have no published 7.58 value, so stale 7.57 guesses
+        // must not remain in either region.
+        var expectedPatch758Opcodes = new Dictionary<ushort, string>
         {
-            [0x0198] = "ActorControl",
-            [0x01E6] = "ActorControlSelf",
-            [0x020A] = "CEDirector",
-            [0x0178] = "CompanyAirshipStatus",
-            [0x039C] = "CompanySubmersibleStatus",
-            [0x028A] = "ContentFinderNotifyPop",
-            [0x01FE] = "ResumeEventScene32",
-            [0x0256] = "EventPlay",
-            [0x0286] = "EventStart",
-            [0x019C] = "Examine",
-            [0x0259] = "FateInfo",
-            [0x02CC] = "InitZone",
-            [0x032D] = "InventoryTransaction",
-            [0x00D1] = "ItemInfo",
-            [0x0234] = "MarketBoardItemListing",
-            [0x010D] = "MarketBoardItemListingCount",
-            [0x011E] = "MarketBoardItemListingHistory",
-            [0x8248] = "MarketBoardRequestItemListingInfo",
-            [0x0114] = "NpcSpawn",
-            [0x0302] = "PlayerSetup",
-            [0x0265] = "PlayerSpawn",
-            [0x0367] = "SubmarineStatusList",
-            [0x007C] = "WorldVisitQueue",
-            [0x0324] = "EventPlay4",
-            [0x00EB] = "SystemLogMessage",
-            [0x03CB] = "FishCaught",
-            [0x02CE] = "StatusEffectList",
-            [0x8368] = "ClientTrigger",
+            [0x02DF] = "ActorControl",
+            [0x00A9] = "ActorControlSelf",
+            [0x026E] = "CEDirector",
+            [0x014F] = "CompanyAirshipStatus",
+            [0x0260] = "CompanySubmersibleStatus",
+            [0x03BF] = "ContentFinderNotifyPop",
+            [0x03B1] = "ResumeEventScene32",
+            [0x020B] = "EventPlay",
+            [0x039F] = "EventStart",
+            [0x0289] = "Examine",
+            [0x00AB] = "InitZone",
+            [0x033D] = "InventoryTransaction",
+            [0x03DA] = "ItemInfo",
+            [0x00B5] = "MarketBoardItemListing",
+            [0x0265] = "MarketBoardItemListingCount",
+            [0x01EB] = "MarketBoardItemListingHistory",
+            [0x83C7] = "MarketBoardRequestItemListingInfo",
+            [0x0176] = "NpcSpawn",
+            [0x01AE] = "PlayerSetup",
+            [0x02FC] = "PlayerSpawn",
+            [0x00F2] = "SubmarineStatusList",
+            [0x0108] = "EventPlay4",
+            [0x01DE] = "SystemLogMessage",
+            [0x0127] = "FishCaught",
+            [0x015D] = "StatusEffectList",
+            [0x8235] = "ClientTrigger",
         };
-        // Global 7.57h values come from FFXIVOpcodes d85eaeb. FateInfo and WorldVisitQueue
-        // have no published 7.57h value yet, so a stale 7.57 guess must not remain.
-        var expectedGlobalOpcodes = new Dictionary<ushort, string>
-        {
-            [0x0229] = "ActorControl",
-            [0x0101] = "ActorControlSelf",
-            [0x034F] = "CEDirector",
-            [0x032E] = "CompanyAirshipStatus",
-            [0x011A] = "CompanySubmersibleStatus",
-            [0x0117] = "ContentFinderNotifyPop",
-            [0x0146] = "ResumeEventScene32",
-            [0x00B4] = "EventPlay",
-            [0x0078] = "EventStart",
-            [0x019E] = "Examine",
-            [0x009C] = "InitZone",
-            [0x01C9] = "InventoryTransaction",
-            [0x0239] = "ItemInfo",
-            [0x0131] = "MarketBoardItemListing",
-            [0x00FF] = "MarketBoardItemListingCount",
-            [0x02DA] = "MarketBoardItemListingHistory",
-            [0x80F2] = "MarketBoardRequestItemListingInfo",
-            [0x017D] = "NpcSpawn",
-            [0x02A6] = "PlayerSetup",
-            [0x017C] = "PlayerSpawn",
-            [0x0166] = "SubmarineStatusList",
-            [0x0081] = "EventPlay4",
-            [0x0250] = "SystemLogMessage",
-            [0x006A] = "FishCaught",
-            [0x00D4] = "StatusEffectList",
-            [0x837D] = "ClientTrigger",
-        };
-        foreach (var (region, expected) in new[] { ("Global", expectedGlobalOpcodes), ("China", expectedChinaOpcodes) })
+        foreach (var (region, expected) in new[] { ("Global", expectedPatch758Opcodes), ("China", expectedPatch758Opcodes) })
         {
             var actual = (IDictionary)opcodeStorage.GetField(region, BindingFlags.Public | BindingFlags.Static)!.GetValue(null)!;
             Assert(actual.Count == expected.Count && expected.All(pair =>
@@ -4465,71 +4435,30 @@ static void ValidateMatchaEventPackets(Assembly assembly)
     var regionType = assembly.GetType("Cafe.Matcha.Constant.Region", true)!;
     var packetType = assembly.GetType("Cafe.Matcha.Network.Packet", true)!;
     var senderType = packetType.GetNestedType("PacketSender")!;
-    var monitorType = assembly.GetType("Cafe.Matcha.Network.NetworkMonitor", true)!;
-    var monitor = Activator.CreateInstance(monitorType)!;
-    var handle = monitorType.GetMethod("HandleMessageByOpcode", BindingFlags.Instance | BindingFlags.NonPublic)!;
-    var stateType = assembly.GetType("Cafe.Matcha.Network.State", true)!;
-    var state = stateType.BaseType!.GetProperty("Instance")!.GetValue(null)!;
-    var fates = stateType.GetField("Fate")!.GetValue(state)!;
-    // Verify parsing without starting upstream telemetry/network workers.
-    fates.GetType().GetField("OnChanged", BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(fates, null);
-    var queueType = assembly.GetType("Cafe.Matcha.Network.Handler.QueueHandler", true)!;
-    var events = new List<object>();
-    Action<object> receive = events.Add;
-    var queue = queueType.GetConstructors().Single().Invoke([receive]);
     var originalRegion = regionProperty.GetValue(config);
     try
     {
-        foreach (var (region, fishingOpcodes) in new[]
-                 {
-                     ("China", MatchaFishingOpcodes.China757),
-                     ("Global", MatchaFishingOpcodes.Global757Hotfix),
-                 })
+        foreach (var region in new[] { "China", "Global" })
         {
             regionProperty.SetValue(config, Enum.Parse(regionType, region));
-            MatchaFishingSmokeTests.Run(assembly, region, fishingOpcodes);
-            object Packet(ushort opcode, uint first, uint second, uint third, bool client = false)
+            MatchaFishingSmokeTests.Run(assembly, region, MatchaFishingOpcodes.Patch758);
+            bool Known(ushort opcode, bool client = false)
             {
                 var bytes = new byte[56];
                 BitConverter.GetBytes(opcode).CopyTo(bytes, 18);
-                BitConverter.GetBytes(first).CopyTo(bytes, 32);
-                BitConverter.GetBytes(second).CopyTo(bytes, 40);
-                BitConverter.GetBytes(third).CopyTo(bytes, 48);
-                return Activator.CreateInstance(packetType, Enum.Parse(senderType, client ? "Client" : "Server"), bytes, 1700000000000L)!;
-            }
-            if (region == "Global")
-            {
-                // Global 7.57h has no published FateInfo/WorldVisitQueue opcode. The old 7.57
-                // values now belong to unrelated packets and must not be parsed as either.
-                Assert(packetType.GetField("Known")!.GetValue(Packet(0x0259, 1234, 1700000000, 900)) is false &&
-                    packetType.GetField("Known")!.GetValue(Packet(0x007C, 1, 45, 0)) is false &&
-                    packetType.GetField("Known")!.GetValue(Packet(0xF009, 0, 0, 0)) is false &&
-                    packetType.GetField("Known")!.GetValue(Packet(0x00E9, 0, 0, 0)) is false,
-                    "Matcha Global still parses stale 7.57 FateInfo/WorldVisitQueue opcodes.");
-                continue;
+                var packet = Activator.CreateInstance(
+                    packetType,
+                    Enum.Parse(senderType, client ? "Client" : "Server"),
+                    bytes,
+                    1700000000000L)!;
+                return packetType.GetField("Known")!.GetValue(packet) is true;
             }
 
-            fates.GetType().GetMethod("Clear")!.Invoke(fates, null);
-            var fate = Packet(0x0259, 1234, 1700000000, 900);
-            Assert(handle.Invoke(monitor, [fate]) is true, $"Matcha {region} did not route FateInfo.");
-            var parsed = fates.GetType().GetProperty("Item")!.GetValue(fates, [1234u])!;
-            Assert((uint)parsed.GetType().GetField("StartTime")!.GetValue(parsed)! == 1700000000 &&
-                (uint)parsed.GetType().GetField("Duration")!.GetValue(parsed)! == 900,
-                $"Matcha {region} lost FATE time/duration.");
-            var visit = Packet(0x007C, 1, 45, 0);
-            var bytes = (byte[])packetType.GetField("Bytes")!.GetValue(visit)!;
-            BitConverter.GetBytes(7u).CopyTo(bytes, 36);
-            events.Clear();
-            Assert(queueType.GetMethod("Handle")!.Invoke(queue, [visit]) is true && events.Count == 1,
-                $"Matcha {region} did not dispatch WorldVisitQueue.");
-            var payload = events.Single();
-            Assert((string)payload.GetType().GetField("Stage")!.GetValue(payload)! == "waiting" &&
-                (uint)payload.GetType().GetField("Order")!.GetValue(payload)! == 7 &&
-                (uint)payload.GetType().GetField("Time")!.GetValue(payload)! == 45,
-                $"Matcha {region} lost queue position/wait time.");
-            Assert(packetType.GetField("Known")!.GetValue(Packet(0x0259, 0, 0, 0, client: true)) is false &&
-                packetType.GetField("Known")!.GetValue(Packet(0xF009, 0, 0, 0)) is false &&
-                packetType.GetField("Known")!.GetValue(Packet(0x00E9, 0, 0, 0)) is false,
+            // 7.58 has no published FateInfo/WorldVisitQueue opcode in either region. The
+            // 7.57 values (CN 0x0259/0x007C) now belong to unrelated packets and must not be
+            // parsed as either; the SilverDasher placeholder and wrong directions stay unknown.
+            Assert(!Known(0x0259) && !Known(0x007C) && !Known(0xF009) && !Known(0x00E9) &&
+                   !Known(0x0259, client: true),
                 $"Matcha {region} accepted a stale or wrong-direction event opcode.");
         }
     }
@@ -4960,17 +4889,17 @@ void ValidateSilverDasherAssemblyRewrite(string sourceRoot)
     var normalizedOpcodes = normalizedOpcodePayload["data"]!
         .Children<JObject>()
         .ToDictionary(item => item.Value<string>("name")!, StringComparer.Ordinal);
-    // Global 7.57h has no published FateInfo opcode; SilverDasher's own placeholder 0xF009
-    // keeps it disabled instead of decoding an unrelated packet as FATE data.
+    // 7.58 has no published FateInfo opcode in either region; SilverDasher's own placeholder
+    // 0xF009 keeps it disabled instead of decoding an unrelated packet as FATE data.
     Assert(
-        normalizedOpcodePayload.Value<string>("version") == "20261016" &&
-        normalizedOpcodes["InitZone"].Value<string>("cn") == "0x02CC" &&
-        normalizedOpcodes["InitZone"].Value<string>("global") == "0x009C" &&
-        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0x0259" &&
+        normalizedOpcodePayload.Value<string>("version") == "20261103" &&
+        normalizedOpcodes["InitZone"].Value<string>("cn") == "0x00AB" &&
+        normalizedOpcodes["InitZone"].Value<string>("global") == "0x00AB" &&
+        normalizedOpcodes["FateInfo"].Value<string>("cn") == "0xF009" &&
         normalizedOpcodes["FateInfo"].Value<string>("global") == "0xF009" &&
-        normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x01E6" &&
-        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x0101",
-        "SilverDasher opcode data was not normalized to Chinese 7.57 / Global 7.57h.");
+        normalizedOpcodes["ActorControlSelf"].Value<string>("cn") == "0x00A9" &&
+        normalizedOpcodes["ActorControlSelf"].Value<string>("global") == "0x00A9",
+        "SilverDasher opcode data was not normalized to 7.58.");
     var judge = rewrittenCore
                        .GetType("SilverDasher.ACT.Doppelgangers.Tailor", throwOnError: true)!
                        .GetMethod(
