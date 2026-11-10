@@ -450,6 +450,7 @@
   "Friend request not found.": "Demande d'ami non trouvée.",
   "Friend request processed.": "Demande d'ami traitée.",
   "Friend service connected.": "Service d'amis connecté.",
+  "The chat data saved on this computer could not be read (it may come from another computer or Windows account). It was set aside and chat started fresh; check the chat history for any message whose delivery was unconfirmed.": "Les données de discussion enregistrées sur cet ordinateur sont illisibles (elles proviennent peut-être d'un autre ordinateur ou compte Windows). Elles ont été mises de côté et la discussion repart de zéro ; vérifiez dans l'historique les messages dont l'envoi n'était pas confirmé.",
   "Friends": "Amis",
   "Friends are not available on this server yet. Account and cloud sync remain available.": "Les amis ne sont pas encore disponibles sur ce serveur. La synchronisation des comptes et du cloud reste disponible.",
   "Friends · {0} online{1}": "Amis · {0} en ligne{1}",

@@ -31,6 +31,7 @@ internal static partial class FriendsUiSmokeTests
         await SaveFailureAsync();
         await SwitchAndPreparationAsync();
         await LocalStateAsync(root);
+        await UnreadableLocalStateAsync(root);
         await PresenceAsync();
         await RemarksAsync();
         await UnreadRequestsAndOwnAsync();
@@ -183,6 +184,50 @@ internal static partial class FriendsUiSmokeTests
         release.TrySetResult();
         await Until(() => !controller.Snapshot.Busy && controller.Snapshot.Friends?.User?.Id == api.Self.Id, "new account");
         Check(api.Attempts.IsEmpty, "Old command was dispatched after account switch.");
+    }
+    // Player report (1.0.0.3): the friends page stayed on "正在读取状态…" and listed no friends,
+    // although the account's friends were fine on the server. The local chat state file is
+    // DPAPI-bound to one Windows account; a config folder carried to another machine or account
+    // (internet cafes, reinstalls) leaves a file that can never be read there, and the friend
+    // list used to wait behind that file forever.
+    private static async Task UnreadableLocalStateAsync(string root)
+    {
+        var api = new Fake { VisualData = true };
+        var directory = Path.Combine(root, "friends-unreadable");
+        var seed = new FriendsLocalStateStore(directory);
+        var earlier = await seed.LoadAsync(api.Self.Id, default);
+        earlier.ReadThrough[Guid.NewGuid().ToString()] = 7;
+        await seed.SaveAsync(api.Self.Id, earlier, default);
+        var file = Directory.GetFiles(directory, "*.dat").Single();
+        var foreign = RandomNumberGenerator.GetBytes(512);
+        await File.WriteAllBytesAsync(file, foreign);
+
+        using (var controller = new FriendsChatController(api, new FriendsLocalStateStore(directory), TimeSpan.FromMilliseconds(50)))
+        {
+            controller.AttachConsumer();
+            using var settle = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+            while (controller.Snapshot.Friends is null && !settle.IsCancellationRequested) await Task.Delay(20);
+            var seen = controller.Snapshot;
+            // FriendsPage draws "正在读取状态…" while Friends.PresenceSettings is missing and
+            // takes the friend rows from Friends, so this is exactly what the player saw.
+            Check(seen.Friends is { Friends.Count: 3, PresenceSettings: not null },
+                $"Unreadable local chat state hid the friend list and own status: state={seen.State}, " +
+                $"friends={(seen.Friends is null ? "none" : seen.Friends.Friends.Count.ToString())}, status={seen.Status}");
+            await Until(() => controller.Snapshot.Conversations.ContainsKey(api.Id), "chat after unreadable state");
+            Check(controller.Snapshot.State == "ready" && controller.Snapshot.Status == FriendsChatController.LocalStateSetAsideNotice,
+                "The player was not told that the local chat state was set aside.");
+            controller.Send(api.Id, "after unreadable state");
+            await Until(() => !controller.Snapshot.Busy && api.Chat.History.Count == 1, "send after unreadable state");
+        }
+
+        // Unknown sends may be in that file: it is kept beside the new one, never erased.
+        Check(File.Exists(file + ".unreadable") && (await File.ReadAllBytesAsync(file + ".unreadable")).SequenceEqual(foreign),
+            "Unreadable local chat state was erased instead of being set aside.");
+        using var restarted = new FriendsChatController(api, new FriendsLocalStateStore(directory), TimeSpan.FromMilliseconds(50));
+        restarted.AttachConsumer();
+        await Until(() => restarted.Snapshot.State == "ready", "restart after set aside");
+        Check(restarted.Snapshot.Status == "好友服务已连接。" && restarted.Snapshot.Friends is { Friends.Count: 3 },
+            "The next start did not read the replacement state normally.");
     }
     private static async Task LocalStateAsync(string root)
     {

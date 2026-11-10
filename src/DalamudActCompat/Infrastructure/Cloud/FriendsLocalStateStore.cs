@@ -15,6 +15,14 @@ internal interface IFriendsLocalStateStore
 {
     Task<FriendsLocalState> LoadAsync(string userId, CancellationToken cancellationToken);
     Task SaveAsync(string userId, FriendsLocalState state, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Moves a state file that <see cref="LoadAsync"/> cannot read out of the way, keeping its
+    /// bytes, and returns the state to continue with. Loading never does this by itself: the
+    /// caller decides, and tells the player.
+    /// </summary>
+    Task<FriendsLocalState> SetAsideUnreadableAsync(string userId, CancellationToken cancellationToken)
+        => Task.FromResult(FriendsLocalState.Empty());
 }
 
 internal sealed class FriendsLocalStateStore(string directory) : IFriendsLocalStateStore
@@ -45,6 +53,38 @@ internal sealed class FriendsLocalStateStore(string directory) : IFriendsLocalSt
             return state;
         }
         finally { CryptographicOperations.ZeroMemory(plain); }
+    }
+
+    // The file is encrypted for one Windows account (DPAPI). A config folder carried to another
+    // computer or account, as internet cafes and reinstalls do, leaves bytes that can never be
+    // decrypted there; damaged or oversized files are equally permanent. IO errors are not.
+    internal static bool IsUnreadable(Exception error)
+        => error is CryptographicException or InvalidDataException or JsonException;
+
+    public async Task<FriendsLocalState> SetAsideUnreadableAsync(string userId, CancellationToken cancellationToken)
+    {
+        var path = GetPath(userId);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        FriendsLocalState result;
+        await using (await AcquireAsync(path + ".lock", cancellationToken).ConfigureAwait(false))
+        {
+            try
+            {
+                // Another game window sharing this folder may already have replaced the file.
+                result = await ReadAsync(userId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception error) when (IsUnreadable(error))
+            {
+                // Kept rather than deleted: it may hold a send whose delivery was never
+                // confirmed, readable again on the computer that wrote it. One copy is enough;
+                // a folder that roams daily must not collect a file per day.
+                File.Move(path, path + ".unreadable", overwrite: true);
+                result = FriendsLocalState.Empty();
+            }
+        }
+
+        loadedUser = userId; baseline = Clone(result);
+        return result;
     }
 
     public async Task SaveAsync(string userId, FriendsLocalState state, CancellationToken cancellationToken)

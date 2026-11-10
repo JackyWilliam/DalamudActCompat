@@ -47,6 +47,10 @@ internal sealed class FriendsChatController : IDisposable
     private FriendsChatSnapshot snapshot;
     private CloudFriendsSession session;
     private FriendsLocalState local = FriendsLocalState.Empty();
+    internal const string LocalStateSetAsideNotice =
+        "本机保存的聊天暂存数据无法读取（可能来自另一台电脑或系统账号），已另存并重新开始；未确认发出的消息请以聊天记录为准。";
+    // Shown instead of the usual connected status for the rest of the session.
+    private string? localStateNotice;
     private string? userId;
     private int busy;
     private int consumerAttached;
@@ -151,7 +155,7 @@ internal sealed class FriendsChatController : IDisposable
                 var current = api.FriendsSession;
                 if (current != session)
                 {
-                    session = current; userId = null; local = FriendsLocalState.Empty();
+                    session = current; userId = null; local = FriendsLocalState.Empty(); localStateNotice = null;
                     lock (queuedReads) queuedReads.Clear();
                     Publish(FriendsChatSnapshot.Empty(session)); nextPoll = DateTimeOffset.MinValue;
                 }
@@ -194,11 +198,22 @@ internal sealed class FriendsChatController : IDisposable
         if (friends.User is null) throw new InvalidDataException("好友服务版本较旧，暂时无法显示聊天身份。");
         if (userId is null)
         {
-            var loaded = await disk.LoadAsync(friends.User.Id, shutdown.Token).ConfigureAwait(false);
+            FriendsLocalState loaded;
+            try { loaded = await disk.LoadAsync(friends.User.Id, shutdown.Token).ConfigureAwait(false); }
+            catch (Exception error) when (FriendsLocalStateStore.IsUnreadable(error))
+            {
+                // Player report: the page stayed on "正在读取状态…" with no friends. This load
+                // sits in front of the friend list, and a file that cannot be read on this
+                // computer fails the same way on every retry. The file only holds unsent
+                // messages and read markers, so set it aside (kept on disk) and say so,
+                // instead of holding the whole page behind it.
+                loaded = await disk.SetAsideUnreadableAsync(friends.User.Id, shutdown.Token).ConfigureAwait(false);
+                localStateNotice = LocalStateSetAsideNotice;
+            }
             EnsureCurrent(); local = loaded; userId = friends.User.Id;
         }
         if (userId != friends.User.Id) throw new InvalidDataException("好友账号身份发生变化，请重新登录。");
-        Publish(snapshot with { Friends = friends, Remarks = RemarksFor(friends), State = "ready", Status = "好友服务已连接。" });
+        Publish(snapshot with { Friends = friends, Remarks = RemarksFor(friends), State = "ready", Status = localStateNotice ?? "好友服务已连接。" });
         if (Volatile.Read(ref consumerAttached) == 0) return;
         var sync = await Call(ct => api.SyncChatAsync(ct, session)).ConfigureAwait(false);
         var ids = sync.Conversations.Select(c => c.Id).ToHashSet(StringComparer.Ordinal);

@@ -76,6 +76,8 @@ internal static class SystemStatusText
         ["好友服务版本较旧，暂时无法显示聊天身份。"] = "The friend service is outdated and cannot provide chat identities yet.",
         ["好友账号身份发生变化，请重新登录。"] = "Your friend account identity changed. Please sign in again.",
         ["好友服务已连接。"] = "Friend service connected.",
+        ["本机保存的聊天暂存数据无法读取（可能来自另一台电脑或系统账号），已另存并重新开始；未确认发出的消息请以聊天记录为准。"] =
+            "The chat data saved on this computer could not be read (it may come from another computer or Windows account). It was set aside and chat started fresh; check the chat history for any message whose delivery was unconfirmed.",
         ["发送已确认。"] = "Delivery confirmed.",
         ["原发送序号已过期，消息不再保留；未重新发送。"] = "The original send sequence expired and the message is no longer retained. It was not resent.",
         ["发送结果待确认，请重试原消息。"] = "Delivery is unconfirmed. Retry the original message.",

@@ -450,6 +450,7 @@
   "Friend request not found.": "フレンドリクエストが見つかりませんでした。",
   "Friend request processed.": "フレンドリクエストが処理されました。",
   "Friend service connected.": "フレンドサービスが接続されました。",
+  "The chat data saved on this computer could not be read (it may come from another computer or Windows account). It was set aside and chat started fresh; check the chat history for any message whose delivery was unconfirmed.": "このPCに保存されたチャットデータを読み込めませんでした（別のPCまたはWindowsアカウントのデータの可能性があります）。データは別名で残し、チャットを新しく開始しました。送信未確認のメッセージはチャット履歴で確認してください。",
   "Friends": "フレンド",
   "Friends are not available on this server yet. Account and cloud sync remain available.": "このサーバーではまだフレンドを利用できません。アカウントとクラウドの同期は引き続き利用できます。",
   "Friends · {0} online{1}": "フレンド · {0} 人オンライン{1}",

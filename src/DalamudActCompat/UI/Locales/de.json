@@ -450,6 +450,7 @@
   "Friend request not found.": "Freundschaftsanfrage nicht gefunden.",
   "Friend request processed.": "Freundschaftsanfrage bearbeitet.",
   "Friend service connected.": "Freundesdienst verbunden.",
+  "The chat data saved on this computer could not be read (it may come from another computer or Windows account). It was set aside and chat started fresh; check the chat history for any message whose delivery was unconfirmed.": "Die auf diesem Computer gespeicherten Chatdaten konnten nicht gelesen werden (sie stammen möglicherweise von einem anderen Computer oder Windows-Konto). Sie wurden beiseitegelegt und der Chat neu begonnen; prüfe im Chatverlauf, ob unbestätigte Nachrichten zugestellt wurden.",
   "Friends": "Freunde",
   "Friends are not available on this server yet. Account and cloud sync remain available.": "Freunde sind auf diesem Server noch nicht verfügbar. Die Konto- und Cloud-Synchronisierung bleibt weiterhin verfügbar.",
   "Friends · {0} online{1}": "Freunde · {0} online{1}",
