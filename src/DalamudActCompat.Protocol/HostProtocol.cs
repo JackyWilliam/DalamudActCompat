@@ -176,11 +176,15 @@ public sealed record HostHealth(
     string Detail,
     DateTimeOffset Since);
 
+// EntityEpoch: the entity capture (HostFfxivEntitySnapshot/Delta.Epoch) that began after this
+// line left the game process. Plugins that read entities while handling the line must not see
+// it before that capture is applied; 0 means the sender makes no such promise.
 public sealed record HostLogEvent(
     DateTimeOffset Timestamp,
     string Line,
     bool IsImport,
-    string? ActLine = null);
+    string? ActLine = null,
+    long EntityEpoch = 0);
 
 public sealed record HostZoneEvent(
     uint TerritoryId,
@@ -218,11 +222,13 @@ public sealed record HostCombatEvent(
     bool InCombat,
     DateTimeOffset Timestamp);
 
+// Epoch increases with every capture of the game's object table; see HostLogEvent.EntityEpoch.
 public sealed record HostFfxivEntitySnapshot(
     uint TerritoryId,
     uint CurrentPlayerId,
     DateTimeOffset Timestamp,
-    IReadOnlyList<HostFfxivCombatant> Combatants);
+    IReadOnlyList<HostFfxivCombatant> Combatants,
+    long Epoch = 0);
 
 public sealed record HostFfxivEntityDelta(
     uint TerritoryId,
@@ -230,7 +236,8 @@ public sealed record HostFfxivEntityDelta(
     DateTimeOffset BaseTimestamp,
     DateTimeOffset Timestamp,
     IReadOnlyList<HostFfxivCombatant> Upserts,
-    IReadOnlyList<uint> RemovedIds);
+    IReadOnlyList<uint> RemovedIds,
+    long Epoch = 0);
 
 public sealed record HostPostNamazuHeading(
     long Address,

@@ -103,6 +103,15 @@ jobs:
             "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "u7b-ordering-smoke")
           if ($LASTEXITCODE -ne 0) { throw "U7b initialization ordering regression." }
 
+      - name: Run U7b tether knockback regression
+        shell: pwsh
+        run: |
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+            --probe-triggernometry-u7b-tether `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "u7b-tether-smoke")
+          if ($LASTEXITCODE -ne 0) { throw "U7b tether knockback regression." }
+
       - name: Run Triggernometry event timing regression
         shell: pwsh
         run: |

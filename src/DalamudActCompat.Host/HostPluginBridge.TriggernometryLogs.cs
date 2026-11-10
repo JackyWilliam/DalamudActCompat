@@ -49,16 +49,27 @@ public static partial class HostPluginBridge
     private static string InitializationKey(Match match)
         => match.Groups["time"].Value + match.Groups["id"].Value.ToUpperInvariant();
 
+    // ACT hands a forwarded line to its handlers synchronously, so the entity epoch that came
+    // with the line is carried on the dispatching thread rather than through ACT's signatures.
+    [ThreadStatic] private static long currentLogEntityEpoch;
+
+    internal static void SetCurrentLogEntityEpoch(long epoch) => currentLogEntityEpoch = epoch;
+
     public static void ProcessTriggernometryLog(object plugin, bool isImport, string line, string zone)
     {
         if (!IsAllowed("triggernometry", "ReadCombatLogs")) return;
         ObserveDrawingLog(plugin, line, "received", isImport ? "import" : "live");
-        TriggerLogBindings.GetValue(plugin, owner => new(owner)).Accept(isImport, line, zone);
+        TriggerLogBindings.GetValue(plugin, owner => new(owner)).Accept(isImport, line, zone, currentLogEntityEpoch);
     }
 
     private static void ResetTriggernometryLogWaits()
     {
         foreach (var binding in TriggerLogBindings) binding.Value.Reset();
+    }
+
+    internal static void FlushTriggernometryLogOrder()
+    {
+        foreach (var binding in TriggerLogBindings) binding.Value.FlushOrder();
     }
 
     private static void PumpTriggernometryLogWaits()
@@ -69,6 +80,9 @@ public static partial class HostPluginBridge
     private sealed class TriggernometryLogBinding : IDisposable
     {
         private readonly TriggernometryActorControlGate gate;
+        private readonly TriggernometryEntityFreshnessBarrier freshness;
+        // Non-zero while TN is handling a delivered line; only read or written under sync.
+        private int dispatchDepth;
         private readonly System.Threading.Timer timer;
         private bool disposed;
         private readonly object sync = new();
@@ -80,7 +94,13 @@ public static partial class HostPluginBridge
             var original = plugin.GetType().GetMethod(
                 "OnLogLineRead__DalamudActCompatOrdered", BindingFlags.Instance | BindingFlags.NonPublic)
                 ?? throw new MissingMethodException(plugin.GetType().FullName, "OnLogLineRead__DalamudActCompatOrdered");
-            var callback = (Action<bool, string, string>)original.CreateDelegate(typeof(Action<bool, string, string>), plugin);
+            var handler = (Action<bool, string, string>)original.CreateDelegate(typeof(Action<bool, string, string>), plugin);
+            Action<bool, string, string> callback = (isImport, line, zone) =>
+            {
+                dispatchDepth++;
+                try { handler(isImport, line, zone); }
+                finally { dispatchDepth--; }
+            };
             gate = new(
                 FfxivRepositoryInstance.GetCurrentTerritoryID,
                 id => FfxivRepositoryInstance.GetCombatantList().Any(x => x.ID == id && x.BNpcID != 0),
@@ -97,6 +117,13 @@ public static partial class HostPluginBridge
                 replayReady: () => !AwaitingInitialization,
                 cancelReplay: () => Volatile.Write(ref awaitingInitialization, null),
                 entitySeen: FfxivRepositoryInstance.HasSeenEntity);
+            // Freshness first, then the actor wait: a line reaches the gate in arrival order
+            // once the capture taken after it is applied, and the gate still holds it if an
+            // actor it names has never appeared.
+            freshness = new(
+                FfxivRepositoryInstance.HasReachedEntityEpoch,
+                gate.Accept,
+                message => Console.WriteLine("Triggernometry: " + message));
             // A missing object must expire even if no more snapshots or logs arrive.
             timer = new(_ => Pump(), null, Timeout.Infinite, Timeout.Infinite);
         }
@@ -109,13 +136,29 @@ public static partial class HostPluginBridge
                 Console.WriteLine("Triggernometry: U7b P1 initialization completed after waiting for its scene entity.");
         }
 
-        internal void Accept(bool isImport, string line, string zone)
+        internal void Accept(bool isImport, string line, string zone, long entityEpoch)
         {
             lock (sync)
             {
                 if (disposed) return;
-                gate.Accept(isImport, line, zone);
-                timer.Change(gate.HasPending ? 20 : Timeout.Infinite, Timeout.Infinite);
+                // A line TN raises while handling a delivered one belongs to that delivery;
+                // queueing it behind lines that still wait would reorder upstream callbacks.
+                if (dispatchDepth != 0) gate.Accept(isImport, line, zone);
+                else freshness.Accept(isImport, line, zone, entityEpoch);
+                timer.Change(HasPending ? 20 : Timeout.Infinite, Timeout.Infinite);
+            }
+        }
+
+        private bool HasPending => gate.HasPending || freshness.HasPending;
+
+        internal void FlushOrder()
+        {
+            lock (sync)
+            {
+                if (disposed) return;
+                try { freshness.Flush(); }
+                catch (Exception ex) { ReportException("triggernometry", "Entity freshness flush", ex); }
+                timer.Change(HasPending ? 20 : Timeout.Infinite, Timeout.Infinite);
             }
         }
 
@@ -126,11 +169,19 @@ public static partial class HostPluginBridge
                 if (disposed) return;
                 try
                 {
-                    if (IsAllowed("triggernometry", "ReadCombatLogs")) gate.Pump();
-                    else gate.Reset();
+                    if (IsAllowed("triggernometry", "ReadCombatLogs"))
+                    {
+                        freshness.Pump();
+                        gate.Pump();
+                    }
+                    else
+                    {
+                        freshness.Reset();
+                        gate.Reset();
+                    }
                 }
                 catch (Exception ex) { ReportException("triggernometry", "ActorControl entity wait", ex); }
-                timer.Change(gate.HasPending ? 20 : Timeout.Infinite, Timeout.Infinite);
+                timer.Change(HasPending ? 20 : Timeout.Infinite, Timeout.Infinite);
             }
         }
 
@@ -138,6 +189,7 @@ public static partial class HostPluginBridge
         {
             lock (sync)
             {
+                freshness.Reset();
                 gate.Reset();
                 if (!disposed) timer.Change(Timeout.Infinite, Timeout.Infinite);
             }
@@ -148,6 +200,7 @@ public static partial class HostPluginBridge
             lock (sync)
             {
                 disposed = true;
+                freshness.Reset();
                 gate.Reset();
                 timer.Dispose();
             }

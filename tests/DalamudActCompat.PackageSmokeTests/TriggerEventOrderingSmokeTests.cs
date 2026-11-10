@@ -33,6 +33,8 @@ internal static class TriggerEventOrderingSmokeTests
         await Case("noisy-combat-keeps-both-edges", () => NoisyCombatKeepsBothEdgesAsync(testRoot));
         await Case("ordered-state-survives-data-overflow", OrderedStateSurvivesDataOverflowAsync);
         await Case("expired-messages-are-counted", ExpiredMessagesAreCountedAsync);
+        await Case("entity-epochs-order-captures-after-lines", () => { EntityEpochsOrderCapturesAfterLines(); return Task.CompletedTask; });
+        await Case("log-lines-name-the-next-entity-capture", () => LogLinesNameTheNextEntityCaptureAsync(testRoot));
         return failures;
     }
 
@@ -156,11 +158,65 @@ internal static class TriggerEventOrderingSmokeTests
             $"an expired message was discarded without being counted (dropped={queue.DroppedDataMessages})");
     }
 
+    // Player report: Triggernometry read a tether source's position before the capture that
+    // carried it had arrived. The clock is what lets the Host tell which capture a line needs.
+    private static void EntityEpochsOrderCapturesAfterLines()
+    {
+        var clock = new HostEntityEpochClock();
+        Require(!clock.IsCaptureAwaited, "a capture is awaited before any line was forwarded");
+        var first = clock.BeginCapture();
+        clock.MarkPublished(first);
+        var line = clock.RequireNextCapture();
+        Require(line == first + 1, "a line produced after a capture began must wait for the next one");
+        Require(clock.RequireNextCapture() == line, "lines produced between two captures share the next capture");
+        Require(clock.IsCaptureAwaited, "an unchanged object table would not be published for a waiting line");
+        var second = clock.BeginCapture();
+        Require(second == line, "the capture after the line does not carry the epoch the line waits for");
+        // A line produced while that capture is being read cannot be covered by it.
+        var during = clock.RequireNextCapture();
+        Require(during == second + 1, "a line produced during a capture was promised that same capture");
+        clock.MarkPublished(second);
+        Require(clock.IsCaptureAwaited, "the line produced during the capture lost its pending capture");
+        clock.MarkPublished(clock.BeginCapture());
+        Require(!clock.IsCaptureAwaited, "idle captures keep being published after every line was satisfied");
+    }
+
+    private static async Task LogLinesNameTheNextEntityCaptureAsync(string root)
+    {
+        var clock = new HostEntityEpochClock();
+        var running = CreateRunningSupervisor(root, "entity-epoch", clock);
+        try
+        {
+            var applied = clock.BeginCapture();
+            clock.MarkPublished(applied);
+            running.Supervisor.PublishLog(DateTimeOffset.Now, "35|raw|TETHER|", "[00:00:00.000] 35 23:4001A001::10001234::0000:0000:002D:", false);
+            var capture = clock.BeginCapture();
+            running.Supervisor.PublishFfxivEntityDelta(new HostFfxivEntityDelta(
+                1363, 0x10001234, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow, [], [], capture));
+            clock.MarkPublished(capture);
+            // No Host is attached, so the flush timer is not running; an ordered state event
+            // flushes the lines produced before it.
+            running.Supervisor.PublishZone(1363, "Dancing Mad (Ultimate)");
+            var sent = await DrainAsync(running.Queue);
+            var batch = sent.FirstOrDefault(envelope => envelope.Type == HostMessageTypes.LogBatch)
+                        ?? throw new InvalidOperationException($"no log batch was sent; sent=[{Describe(sent)}]");
+            var required = batch.Payload.EnumerateArray().Single().GetProperty("EntityEpoch").GetInt64();
+            var delta = sent.FirstOrDefault(envelope => envelope.Type == HostMessageTypes.FfxivEntityDelta)
+                        ?? throw new InvalidOperationException($"an unchanged capture was not sent; sent=[{Describe(sent)}]");
+            Require(required == applied + 1 && delta.Payload.GetProperty("Epoch").GetInt64() == required,
+                $"the tether line waits for epoch {required}, but the capture after it was sent as {delta.Payload.GetProperty("Epoch").GetInt64()}");
+        }
+        finally
+        {
+            await StopAsync(running);
+        }
+    }
+
     private sealed record RunningSupervisor(ActHostSupervisor Supervisor, HostIpcClient Client, BoundedHostMessageQueue Queue);
 
     // The supervisor normally reaches Running only through a real Host handshake. Setting
     // the two lifecycle fields isolates its publication order without a Host process.
-    private static RunningSupervisor CreateRunningSupervisor(string root, string name)
+    private static RunningSupervisor CreateRunningSupervisor(string root, string name, HostEntityEpochClock? entityEpochClock = null)
     {
         var scope = Path.Combine(root, "trigger-ordering", name);
         var logger = new PluginLogger(DispatchProxy.Create<IPluginLog, NoOpPluginLogProxy>());
@@ -170,7 +226,8 @@ internal static class TriggerEventOrderingSmokeTests
             Path.Combine(scope, "plugins"),
             Path.Combine(scope, "config"),
             client,
-            logger);
+            logger,
+            entityEpochClock: entityEpochClock);
         SetField(client, "status", HostConnectionStatus.Connected);
         SetField(supervisor, "state", HostSupervisorState.Running);
         var queue = (BoundedHostMessageQueue)(typeof(HostIpcClient)

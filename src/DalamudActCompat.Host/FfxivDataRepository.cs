@@ -19,6 +19,8 @@ internal sealed class FfxivDataRepository : IDataRepository
     private Dictionary<uint, HostFfxivCombatant> baselineCombatants = [];
     private DateTimeOffset baselineTimestamp = DateTimeOffset.MinValue;
     private DateTimeOffset lastEntityUpdateTimestamp = DateTimeOffset.MinValue;
+    // Epoch of the newest applied game-side capture; see HostLogEvent.EntityEpoch.
+    private long entityEpoch;
     private ReadOnlyCollection<Combatant> combatants =
         Array.AsReadOnly(Array.Empty<Combatant>());
     // A legacy core does not send HostGameContext. Preserve its historical CN contract
@@ -81,8 +83,20 @@ internal sealed class FfxivDataRepository : IDataRepository
             baselineCombatants = nextById;
             baselineTimestamp = next.Timestamp;
             lastEntityUpdateTimestamp = next.Timestamp;
+            // A full snapshot restarts the count, so a reloaded sender that begins again at a
+            // low epoch is followed instead of being outranked by its predecessor forever.
+            entityEpoch = next.Epoch;
             combatants = MapCombatants(nextById.Values, next.CurrentPlayerId);
             RecordSeenLocked(next.TerritoryId, nextById.Keys);
+        }
+    }
+
+    /// <summary>Whether a capture at or after <paramref name="epoch"/> has been applied.</summary>
+    internal bool HasReachedEntityEpoch(long epoch)
+    {
+        lock (syncRoot)
+        {
+            return entityEpoch >= epoch;
         }
     }
 
@@ -143,6 +157,7 @@ internal sealed class FfxivDataRepository : IDataRepository
                 delta.Timestamp,
                 merged.Values.ToArray());
             lastEntityUpdateTimestamp = delta.Timestamp;
+            entityEpoch = Math.Max(entityEpoch, delta.Epoch);
             combatants = MapCombatants(merged.Values, delta.CurrentPlayerId);
             RecordSeenLocked(delta.TerritoryId, delta.Upserts.Select(upsert => upsert.Id).Where(IsValidEntityId));
             return true;

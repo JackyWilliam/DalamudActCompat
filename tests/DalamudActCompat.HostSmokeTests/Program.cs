@@ -53,16 +53,17 @@ var mapEffectProbe = string.Equals(
     StringComparison.Ordinal);
 var u7bProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b", StringComparison.Ordinal);
 var u7bOrderingProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b-ordering", StringComparison.Ordinal);
+var u7bTetherProbe = string.Equals(focusedProbe, "--probe-triggernometry-u7b-tether", StringComparison.Ordinal);
 var drawingProbe = string.Equals(focusedProbe, "--probe-drawing-diagnostics", StringComparison.Ordinal);
 var clearProbe = string.Equals(focusedProbe, "--probe-u7b-clear-effects", StringComparison.Ordinal);
 var drawingSoakProbe = string.Equals(focusedProbe, "--probe-drawing-soak", StringComparison.Ordinal);
 var timingProbe = string.Equals(focusedProbe, "--probe-triggernometry-timing", StringComparison.Ordinal);
-var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || drawingProbe || drawingSoakProbe || timingProbe || clearProbe ? args[1..] : args;
+var effectiveArgs = entityTimingProbe || mapEffectProbe || u7bProbe || u7bOrderingProbe || u7bTetherProbe || drawingProbe || drawingSoakProbe || timingProbe || clearProbe ? args[1..] : args;
 if (effectiveArgs.Length is not (1 or 2 or 3))
 {
     throw new ArgumentException(
         "Pass Host.exe and optionally <triggernometry.dll>, or <plugin-root> <config-root>. " +
-        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering, --probe-triggernometry-timing, --probe-drawing-diagnostics, --probe-drawing-soak or --probe-u7b-clear-effects " +
+        "Use --probe-triggernometry-entity-timing, --probe-triggernometry-mapeffect, --probe-triggernometry-u7b, --probe-triggernometry-u7b-ordering, --probe-triggernometry-u7b-tether, --probe-triggernometry-timing, --probe-drawing-diagnostics, --probe-drawing-soak or --probe-u7b-clear-effects " +
         "with the three-path form for a focused probe.");
 }
 
@@ -86,6 +87,7 @@ await ValidateAuthorizedTtsCadenceAsync();
 ValidateFfxivEntityDeltaRepository();
 ValidateFfxivRegionContext();
 TriggernometryActorControlTests.Run();
+TriggernometryEntityFreshnessTests.Run();
 DrawingDiagnosticTests.Run();
 
 if (clearProbe)
@@ -133,6 +135,12 @@ if (mapEffectProbe)
 if (u7bProbe || u7bOrderingProbe)
 {
     await ValidateTriggernometryU7bProbeAsync(u7bOrderingProbe);
+    return;
+}
+
+if (u7bTetherProbe)
+{
+    await ValidateTriggernometryU7bTetherProbeAsync();
     return;
 }
 
@@ -3422,6 +3430,202 @@ async Task ValidateDrawingSoakAsync()
         }
     }
     Console.WriteLine($"PASS 1200 real Host drawing/waymark cycles, {completed} callbacks, 3 processes / 2 restarts, full+delta entity updates, 12 zone entries; wall={timer.Elapsed.TotalSeconds:F1}s at 100 ms cadence (not an hours-long soak).");
+}
+
+// Player report (1.0.0.3): "绝妖星宝宝椅机制报反，如 P1 一神击退". The original U7b v1.0.6 chain
+// reads the tether source's height from _entity at the moment the tether line arrives
+// (18.5 = first statue) to decide whether the player is the knockback target; the final call
+// is "击退到 <corner>" for the target and "直接去 <opposite corner>" for everyone else. If the
+// entity is absent or stale at that moment, the target hears the other group's corner.
+async Task ValidateTriggernometryU7bTetherProbeAsync()
+{
+    await PrepareLegacySmokeConfigurationAsync();
+    var configurationPath = Path.Combine(configRoot!, "Config", "Triggernometry.config.xml");
+    var configuration = XDocument.Load(configurationPath);
+    var root = configuration.Root!.Element("Root")!;
+    root.RemoveNodes();
+    var fixture = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "Fixtures", "U7bP1Tether.xml"));
+    var folder = new XElement(fixture.Root!.Element("ExportedFolder")!);
+    folder.Name = "Folder";
+    // Never play the pack's direct speech on the test machine; its calls are observed as text.
+    foreach (var speech in folder.Descendants("ActionPlaySpeech").ToArray())
+        speech.ReplaceWith(new XElement("ActionLogMessage",
+            new XAttribute("Message", "DACT_U7B_SPEECH:" + (string?)speech.Attribute("Message"))));
+    root.Add(new XElement("Folders", folder));
+    configuration.Root!.Add(XElement.Parse("""
+        <PersistentVariables><Scalar /><List /><Table /><Dict><Item><Key><string>U7b_cfg</string></Key>
+        <Value><VariableDictionary LastChanger="U7b offline fixture"><Items /></VariableDictionary></Value>
+        </Item></Dict></PersistentVariables>
+        """));
+    root.Add(XElement.Parse("""
+        <Triggers><Trigger Enabled="true" Id="6c4d6f0e-5a52-4c0c-9a53-0d5a1c3e7b11" Name="Synthetic party setup" RegularExpression="^DACT_U7B_RESET$">
+        <Actions>
+        <Action OrderNumber="1" ActionType="Variable" Asynchronous="False" VariableOp="UnsetRegexUniversal" VariableName="^U7b" />
+        <Action OrderNumber="2" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="myIdx" VariableExpression="8" />
+        <Action OrderNumber="3" ActionType="Variable" Asynchronous="False" VariableOp="SetNumeric" VariableName="myIdx_isTH" VariableExpression="0" />
+        </Actions></Trigger>
+        <Trigger Enabled="true" Id="0f6f7b1c-93f0-4a43-8d0b-5f5f5d6f2a22" Name="Observe spoken calls" RegularExpression="^tts:\d+:(?&lt;text&gt;.+)$"><Actions>
+        <Action ActionType="NamedCallback" NamedCallbackName="PictoACT" NamedCallbackParam="DACT_U7B_TTS ${text}" />
+        </Actions></Trigger></Triggers>
+        """));
+    configuration.Save(configurationPath);
+    var (host, pipe, session) = await StartConnectedHostAsync(loadPlugins: true, faultInjection: true);
+    await using (pipe)
+    using (host)
+    {
+        try
+        {
+            _ = await ReadWithTimeoutAsync(pipe);
+            var sequence = 1L;
+            async Task SendAsync<T>(string type, HostMessagePriority priority, T payload, string? correlation = null)
+                => await HostFrameCodec.WriteAsync(pipe.Writer,
+                    HostEnvelope.Create(session, sequence++, type, priority, payload, correlation), CancellationToken.None);
+            await SendAsync(HostMessageTypes.Hello, HostMessagePriority.Control,
+                new HostHello("u7b-tether-probe", "1", Environment.ProcessId, [HostProtocol.CurrentVersion]));
+            await ReadUntilAsync(pipe, HostMessageTypes.HelloAck, 90);
+            await SendAsync(HostMessageTypes.Permissions, HostMessagePriority.Control,
+                new HostPermissionSnapshot(new Dictionary<string, IReadOnlyList<string>>
+                {
+                    ["triggernometry"] = ["ReadCombatLogs", "ReadLocalConfiguration"],
+                    ["postnamazu"] = ["ReadCombatLogs", "ReadLocalConfiguration", "GameCommand"],
+                }, ["triggernometry", "postnamazu"]));
+            await SendAsync(HostMessageTypes.ZoneChanged, HostMessagePriority.Critical,
+                new HostZoneEvent(1363, "Dancing Mad (Ultimate)", DateTimeOffset.UtcNow));
+            var ready = await ReadUntilAsync(pipe, HostMessageTypes.Health, 90).WaitAsync(TimeSpan.FromSeconds(30));
+            Assert(ready.Payload.Deserialize<HostHealth>()?.State == "plugins.ready", "U7b tether Host did not load both real plugins.");
+
+            async Task LineAsync(string line, int settleMilliseconds = 100)
+            {
+                await SendAsync(HostMessageTypes.LogBatch, HostMessagePriority.Data,
+                    new[] { new HostLogEvent(DateTimeOffset.UtcNow, line, false, line) });
+                await Task.Delay(settleMilliseconds);
+            }
+
+            // Collects what the pack would have spoken until the Host has been quiet for a while.
+            async Task<List<string>> SpokenAsync()
+            {
+                var spoken = new List<string>();
+                var until = DateTimeOffset.UtcNow.AddMilliseconds(2500);
+                while (DateTimeOffset.UtcNow < until)
+                {
+                    using var cancellation = new CancellationTokenSource(until - DateTimeOffset.UtcNow);
+                    HostEnvelope? envelope;
+                    try { envelope = await HostFrameCodec.ReadAsync(pipe.Reader, cancellation.Token); }
+                    catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { break; }
+                    if (envelope is null) throw new EndOfStreamException("U7b tether Host closed its pipe.");
+                    if (envelope.Type != HostMessageTypes.CommandRequest) continue;
+                    var request = envelope.Payload.Deserialize<HostCommandRequest>()!;
+                    var payload = request.Arguments.GetValueOrDefault("payload") ?? string.Empty;
+                    if (payload.StartsWith("DACT_U7B_TTS ", StringComparison.Ordinal)) spoken.Add(payload["DACT_U7B_TTS ".Length..].Trim());
+                    await SendAsync(HostMessageTypes.CommandResult, HostMessagePriority.Control,
+                        new HostCommandResult(true, "completed", "offline-u7b-tether"), envelope.CorrelationId);
+                }
+                return spoken;
+            }
+
+            var playerSnapshot = CreateTestFfxivSnapshot();
+            var template = playerSnapshot.Combatants[0];
+            var statue = template with { Id = 0x4001895C, Name = "", Type = 7, BNpcNameId = 0, BNpcId = 2015156, PosX = 100, PosY = 0, PosZ = 100, Heading = 0 };
+            // The snapshot carries game coordinates: PosY is the height TN exposes as _entity.z.
+            HostFfxivCombatant Source(uint id, float height) => template with
+                { Id = id, Name = "", Type = 2, BNpcNameId = 0, BNpcId = 18041, PosX = 100, PosY = height, PosZ = 80, Heading = 0 };
+            const float FirstStatueHeight = 18.5f;
+            var results = new Dictionary<string, List<string>>();
+
+            // The game side numbers every capture of its object table and stamps each log line
+            // with the first capture that begins after the line (HostEntityEpochClock). `late`
+            // sends the tether source's current state in that capture, 60 ms after the tether
+            // line, which is how a moved or newly spawned actor really reaches the Host.
+            var epoch = 0L;
+            async Task<List<string>> CaseAsync(string name, uint sourceId, HostFfxivCombatant[] known,
+                bool late, bool ordered, bool removedBeforeTether = false)
+            {
+                var baseline = playerSnapshot with
+                {
+                    TerritoryId = 1363, Timestamp = DateTimeOffset.UtcNow,
+                    Combatants = [.. playerSnapshot.Combatants, statue, .. known],
+                    Epoch = ++epoch,
+                };
+                await SendAsync(HostMessageTypes.FfxivEntities, HostMessagePriority.State, baseline);
+                await Task.Delay(200);
+                if (removedBeforeTether)
+                {
+                    await SendAsync(HostMessageTypes.FfxivEntityDelta, HostMessagePriority.State,
+                        new HostFfxivEntityDelta(1363, baseline.CurrentPlayerId, baseline.Timestamp,
+                            DateTimeOffset.UtcNow, [], [sourceId], ++epoch));
+                    await Task.Delay(150);
+                }
+                await LineAsync("DACT_U7B_RESET");
+                await LineAsync("[21:38:41.638] 273 111:4001895C:019D:1:2:0:0:", 300);
+                var tether = $"[21:38:42.000] 35 23:{sourceId:X8}::10001234:Host Smoke Player:0000:0000:002D:E0000000:000F:0000:";
+                var awaited = late ? epoch + 1 : epoch;
+                await SendAsync(HostMessageTypes.LogBatch, HostMessagePriority.Data,
+                    new[] { new HostLogEvent(DateTimeOffset.UtcNow, tether, false, tether, ordered ? awaited : 0) });
+                if (late)
+                {
+                    await Task.Delay(60);
+                    await SendAsync(HostMessageTypes.FfxivEntityDelta, HostMessagePriority.State,
+                        new HostFfxivEntityDelta(1363, baseline.CurrentPlayerId, baseline.Timestamp,
+                            DateTimeOffset.UtcNow, [Source(sourceId, FirstStatueHeight)], [], ++epoch));
+                }
+                await Task.Delay(400);
+                await LineAsync("[21:38:43.000] 263 107:4001895C:BA98:100:100:0:0:");
+                await LineAsync("[21:38:44.000] 27 1B:4001895C::0:0:02A2:");
+                await LineAsync("[21:38:45.000] 27 1B:10001234::0:0:007F:");
+                var spoken = await SpokenAsync();
+                results[name] = spoken;
+                Console.WriteLine($"U7B_TETHER_CASE {name}: {string.Join(" | ", spoken)}");
+                await Task.Delay(1200);
+                return spoken;
+            }
+
+            // The knockback target is told so, then sent to the knockback corner.
+            static bool Correct(List<string> spoken)
+                => spoken.Count == 2 && spoken[0] == "点名击退" && spoken[1].StartsWith("击退到", StringComparison.Ordinal);
+            // What the player reported: no target call, and the other group's (opposite) corner.
+            static bool Reversed(List<string> spoken)
+                => spoken.Count == 1 && spoken[0].StartsWith("直接去", StringComparison.Ordinal);
+
+            Assert(Correct(await CaseAsync("current", 0x4001A001, [Source(0x4001A001, FirstStatueHeight)], late: false, ordered: true)),
+                "U7b P1 knockback call is wrong even with a current tether source.");
+            // Control: a sender without the ordering promise still shows the reported failure.
+            // If this ever passes, the cases below no longer prove that ordering is what fixes it.
+            Assert(Reversed(await CaseAsync("moved-unordered", 0x4001A002, [Source(0x4001A002, 0)], late: true, ordered: false)),
+                "The reported reversed call no longer reproduces without entity ordering.");
+            Assert(Correct(await CaseAsync("moved", 0x4001A003, [Source(0x4001A003, 0)], late: true, ordered: true)),
+                "A tether source that had just moved was read at its old height.");
+            Assert(Correct(await CaseAsync("new", 0x4001A004, [], late: true, ordered: true)),
+                "A newly spawned tether source was read before it reached the Host.");
+            Assert(Correct(await CaseAsync("returned", 0x4001A005, [Source(0x4001A005, FirstStatueHeight)], late: true, ordered: true,
+                    removedBeforeTether: true)),
+                "A tether source that left and came back was read while absent.");
+            Console.WriteLine("U7b P1 tether: knockback target call with current/moved/new/returned tether source passed; unordered control reproduces the reported reversed call.");
+
+            var output = Environment.GetEnvironmentVariable("ACTCOMPAT_U7B_PROBE_OUTPUT");
+            if (!string.IsNullOrWhiteSpace(output))
+                await File.WriteAllTextAsync(output, JsonSerializer.Serialize(results,
+                    new JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping }));
+            await SendAsync(HostMessageTypes.Shutdown, HostMessagePriority.Control,
+                new HostHealth("stopping", "U7b tether probe", DateTimeOffset.UtcNow));
+            await ReadUntilAsync(pipe, HostMessageTypes.ShutdownAck, 90);
+            await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Console.WriteLine("U7B_TETHER_HOST_LOG_BEGIN");
+            foreach (var line in ReadProcessLog(host).Output.Split('\n').Where(x => x.Contains("Triggernometry:") || x.Contains("not ready within")))
+                Console.WriteLine(line.TrimEnd());
+            Console.WriteLine("U7B_TETHER_HOST_LOG_END");
+        }
+        catch
+        {
+            if (!host.HasExited)
+            {
+                host.Kill(entireProcessTree: true);
+                await host.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            var (output, error) = ReadProcessLog(host);
+            Console.Error.WriteLine($"U7b tether Host output:\n{output}\nU7b tether Host errors:\n{error}");
+            throw;
+        }
+    }
 }
 
 async Task ValidateTriggernometryU7bProbeAsync(bool validateOrdering = false)

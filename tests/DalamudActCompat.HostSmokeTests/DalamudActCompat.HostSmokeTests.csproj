@@ -9,6 +9,7 @@
   <ItemGroup>
     <Content Include="Fixtures/U7bP1.xml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/U7bP1Current.xml" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures/U7bP1Tether.xml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/U7aOrb.xml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/RedrawMinimal.xml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/U7bClearEffects.xml" CopyToOutputDirectory="PreserveNewest" />

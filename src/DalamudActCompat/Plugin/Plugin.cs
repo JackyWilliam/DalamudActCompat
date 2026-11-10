@@ -167,6 +167,7 @@ public sealed class Plugin : IDalamudPlugin
     private bool backgroundOperationShutdownStarted;
     private DateTimeOffset nextHostEntitySnapshotAt;
     private DateTimeOffset nextHostEntityDeltaAt;
+    private readonly HostEntityEpochClock hostEntityEpochClock = new();
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
     private HostFfxivEntitySnapshot? hostEntitySnapshotBaseline;
     private IReadOnlyList<ActPlayerIdentity> playerIdentitySnapshot = [];
@@ -381,7 +382,8 @@ public sealed class Plugin : IDalamudPlugin
             () => Volatile.Read(ref silverDasherEventsEnabled) == 1,
             enableMemoryProtection: true,
             packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null,
-            pluginDirectoryProvider: () => paths.ActPluginDirectory);
+            pluginDirectoryProvider: () => paths.ActPluginDirectory,
+            entityEpochClock: hostEntityEpochClock);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
@@ -5387,12 +5389,14 @@ public sealed class Plugin : IDalamudPlugin
 
         try
         {
+            // Reserved before the object table is read; see HostEntityEpochClock.
+            var epoch = hostEntityEpochClock.BeginCapture();
             var snapshot = FfxivEntitySnapshotBuilder.Build(
                 objectTable,
                 partyList,
                 services.ClientState,
                 playerState,
-                now);
+                now) with { Epoch = epoch };
 
             var baseline = hostEntitySnapshotBaseline;
             if (baseline is null ||
@@ -5422,15 +5426,20 @@ public sealed class Plugin : IDalamudPlugin
                     matchaHostSupervisor.PublishFfxivEntities(snapshot);
                 }
 
+                hostEntityEpochClock.MarkPublished(epoch);
                 return;
             }
 
-            var delta = FfxivEntitySnapshotBuilder.BuildDelta(baseline!, snapshot);
-            if (delta.Upserts.Count == 0 && delta.RemovedIds.Count == 0)
+            var delta = FfxivEntitySnapshotBuilder.BuildDelta(baseline!, snapshot) with { Epoch = epoch };
+            // An unchanged table is normally not worth a message, but a forwarded log line may
+            // be waiting in the Host for exactly this capture.
+            if (delta.Upserts.Count == 0 && delta.RemovedIds.Count == 0 &&
+                !hostEntityEpochClock.IsCaptureAwaited)
             {
                 return;
             }
 
+            hostEntityEpochClock.MarkPublished(epoch);
             hostSupervisor.PublishFfxivEntityDelta(delta);
             genericHostSupervisor.PublishFfxivEntityDelta(delta);
             if (Volatile.Read(ref matchaEventsEnabled) == 1)
