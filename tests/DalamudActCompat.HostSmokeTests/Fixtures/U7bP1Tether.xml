@@ -1,0 +1,257 @@
+<?xml version='1.0' encoding='utf-8'?>
+<TriggernometryExport PluginVersion="2.4.3.0">
+  <ExportedFolder Id="11cd4517-1f76-4ebf-9455-00862a617a35" Enabled="true" Name="U7b 绝妖星宝宝椅 v1.0.6" RawEnvironmentVariables="prefix = U7b">
+    <Folders>
+      <Folder Id="334fe038-16ba-4463-a9ce-7e2b602df000" Enabled="true" Name="区域限制" FFXIVZoneFilterEnabled="True" FfxivZoneFilterRegularExpression="^1363$">
+        <Folders>
+          <Folder Id="8a43fe25-8247-4131-8f9c-d2a09b73995c" Enabled="true" Name="P1">
+            <Folders>
+              <Folder Id="ab592e74-1b78-4597-8a7c-e9616e0e2e49" Enabled="true" Name="杂项">
+                <Triggers>
+                  <Trigger Enabled="true" Id="0d097b88-a651-49df-8c33-d74c94d15cff" Name="转录：连线" RegularExpression="^.{15}\S+ 23:(?&lt;sid&gt;4.{7}):[^:]*:(?&lt;tid&gt;1.{7}):[^:]*:[^:]*:[^:]*:(?&lt;type&gt;002D)">
+                    <Actions>
+                      <ActionPlaceholder Async="True" Desc="连线实体 base id 相同，只有位置有差异，且每个神像均不同，这里用 z 区分" DescOverride="True" />
+                      <ActionLogMessage Message="U7b1_连线:${?d: 18.5=1, 22.5=2黑泥, 7=2石头, 27=3魅惑, 8.5=3睡眠 [${n: round(${_entity[${sid}].z}, 1)}]}:${tid}" ProcessAsLogline="True" AddToACTEncounter="True" />
+                    </Actions>
+                  </Trigger>
+                </Triggers>
+              </Folder>
+              <Folder Id="ac24aeeb-f6fd-4169-8681-771f4438cee9" Enabled="true" Name="P1-1a 前半" RawEnvironmentVariables="phase = P11a">
+                <Triggers>
+                  <Trigger Enabled="true" Id="19aa6a4d-0797-45c1-aa10-efc9c9581f4a" Name="0. 初始化" RegularExpression="^.{15}\S+ 1019D:(?&lt;id&gt;4.{7}):[^:]*:[^:]*:(?&lt;baseid&gt;2015156):(?&lt;x&gt;[^:]+):(?&lt;y&gt;[^:]+):(?&lt;z&gt;[^:]+):(?&lt;h&gt;[^:]+):[^:]*:(?&lt;flag&gt;2):">
+                    <Actions>
+                      <ActionVariableScalar Operation="SetString" Name="U7b_phase" Value="${env:phase}" />
+                      <ActionVariableScalar Operation="UnsetRegexUniversal" Name="^U7b11a" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="bd2e426e-67d8-47f3-acfc-53c3ac204ed5" Name="2.2 记录火真假 =&gt; 3" RegularExpression="^.{15}\S+ 1B:(?&lt;tid&gt;4.{7}):[^:]*:[^:]*:[^:]*:(?&lt;type&gt;02A[12]):">
+                    <Actions>
+                      <ActionPlaceholder Async="True" Desc="phase&#13;&#10;" DescOverride="True" />
+                      <ActionVariableScalar Operation="SetNumeric" Name="U7b11a_b真火" Value="0x${type} = 0x02A2" />
+                      <ActionLogMessage Message="_U7b11a_魔法" ProcessAsLogline="True" AddToACTEncounter="True">
+                        <Condition Grouping="And">
+                          <ConditionSingle L="${ev:U7b11a_b真冰}" Op="NumericTrue" />
+                          <ConditionSingle L="${ev:U7b11a_b真火}" Op="NumericTrue" />
+                          <ConditionSingle L="${ev:U7b11a_b散raw}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                    </Actions>
+                    <Condition Grouping="Or">
+                      <ConditionSingle L="${v:U7b_phase}" TypeL="String" R="${env:phase}" TypeR="String" Op="StringEqualNocase" />
+                    </Condition>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="55815b65-851f-443e-9f57-74c308ff03ef" Name="2.1 记录冰扇形 =&gt; 3" RegularExpression="^.{15}\S+ 107:(?&lt;sid&gt;4.{7}):(?&lt;aid&gt;BA9[8E]):(?&lt;x&gt;[^:]+):(?&lt;y&gt;[^:]+):(?&lt;z&gt;[^:]+):(?&lt;h&gt;[^:]+)" PeriodRefire="Deny" RefirePeriodExpression="1000">
+                    <Actions>
+                      <ActionPlaceholder Async="True" Desc="phase&#13;&#10;" DescOverride="True" />
+                      <ActionVariableScalar Operation="SetNumeric" Name="U7b11a_b真冰" Value="0x${aid} = 0xBA98" />
+                      <ActionVariableScalar Operation="SetNumeric" Name="U7b11a_b冰主斜" Value="RadToDir(${h}, -4) % 2 = 0" />
+                      <ActionLogMessage Message="_U7b11a_魔法" ProcessAsLogline="True" AddToACTEncounter="True">
+                        <Condition Grouping="And">
+                          <ConditionSingle L="${ev:U7b11a_b真冰}" Op="NumericTrue" />
+                          <ConditionSingle L="${ev:U7b11a_b真火}" Op="NumericTrue" />
+                          <ConditionSingle L="${ev:U7b11a_b散raw}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                    </Actions>
+                    <Condition Grouping="Or">
+                      <ConditionSingle L="${v:U7b_phase}" TypeL="String" R="${env:phase}" TypeR="String" Op="StringEqualNocase" />
+                    </Condition>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="3c1ec89f-24d6-44c6-97be-bc7676bde2db" Name="1. 连线 1" RegularExpression="^U7b1_连线:1:(?&lt;tid&gt;1.{7})">
+                    <Actions>
+                      <ActionLogMessage Async="True" Message="tts:0:点名击退" ProcessAsLogline="True" />
+                      <ActionVariableScalar Async="True" Operation="SetString" Name="U7b11a_b击退" Value="1" />
+                      <ActionNamedCallback Async="True" DescBackColor="ffd" Name="PictoACT" Parameter="Tag: U7b11a_击退&#13;&#10;t: 5&#13;&#10;Omen: m0532_hukitobashi_o0w&#13;&#10;O: 100, 80, 0.05&#13;&#10;θ: 0&#13;&#10;Scale: 20, 40, 1&#13;&#10;Color: 1, 1, 1, 0.25" />
+                    </Actions>
+                    <Condition Grouping="Or">
+                      <ConditionSingle L="${tid}" TypeL="String" R="${_me.id}" TypeR="String" Op="StringEqualNocase" />
+                    </Condition>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="d6f50d31-e3bb-4a3e-a280-8be3cceb997b" Name="3. 处理魔法 =&gt; 4" RegularExpression="^_U7b11a_魔法">
+                    <Actions>
+                      <ActionLogMessage Message="U7b11a_魔法:b真冰:${!v:U7b11a_b真冰}:b散:${n: ${!v:U7b11a_b真火} = ${!v:U7b11a_b散raw}}:b冰主斜:${!v:U7b11a_b冰主斜}:b击退:${ev:U7b11a_b击退}" ProcessAsLogline="True" AddToACTEncounter="True" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="49b4545e-c37b-48d8-b0e1-eae2963ea427" Name="[F] 分散/分摊 =&gt; 点位" RegularExpression="^_U7b11a_散摊:b散:(?&lt;b散&gt;[01]):dirN4:(?&lt;dirN4&gt;[0-3])">
+                    <Actions>
+                      <ActionPlaceholder Async="True" Desc="远程分散位置要接近水平中轴线，故 dirN4 奇偶对应位置不同；这里用 dir4 代替 dirN4 方便写坐标" DescOverride="True" />
+                      <ActionVariableList Operation="Build" Value="|-1:-6.5|-6.5:-1|-9:-9|-14:-1" TargetVar="_散">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${dirN4} % 2" TypeL="Numeric" R="0" TypeR="String" Op="StringEqualCase" />
+                        </Condition>
+                      </ActionVariableList>
+                      <ActionVariableList Operation="Build" Value="|-1:-6.5|-6.5:-1|-1:-14|-9:-9" TargetVar="_散">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${dirN4} % 2" TypeL="Numeric" R="1" TypeR="String" Op="StringEqualCase" />
+                        </Condition>
+                      </ActionVariableList>
+                      <ActionPlaceholder Async="True" Desc="分散" DescOverride="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:1:dir4:${dirN4}:b自:${n: (${!v:myIdx} - 1) %% 4 = 0}:xy:${!l:_散[1]}" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:1:dir4:${dirN4}:b自:${n: (${!v:myIdx} - 2) %% 4 = 0}:xy:${!l:_散[2]}" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:1:dir4:${dirN4}:b自:${n: (${!v:myIdx} - 3) %% 4 = 0}:xy:${!l:_散[3]}" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:1:dir4:${dirN4}:b自:${n: (${!v:myIdx} - 4) %% 4 = 0}:xy:${!l:_散[4]}" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:1:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:${!l:_散[1]}" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:1:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:${!l:_散[2]}" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:1:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:${!l:_散[3]}" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:1:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:${!l:_散[4]}" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionPlaceholder Async="True" Desc="分摊" DescOverride="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:0:dir4:${dirN4}:b自:1:xy:-5:-5" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericFalse" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊点位:b散:0:dir4:${n: (${dirN4} + 2) % 4}:b自:0:xy:-5:-5" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericFalse" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionVariableList Name="_散" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="false" Id="132d88a0-0f12-416e-baa5-e162786238f4" Name="Debug Log 2026-06-04 05:11" Source="None">
+                    <Actions>
+                      <ActionLogMessage Async="True" Message="[21:38:41.638] _EObjAnimation 1019D:4001895C::0:2015156:100:100:0:0:1:2:0:0" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionPlaceholder ExecDelay="500" Async="True" />
+                      <ActionLogMessage Async="True" Message="U7b1_连线:1:${!l:party[2]}" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionLogMessage Async="True" Message="U7b1_连线:1:${!l:party[1]}" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionLogMessage Async="True" Message="U7b1_连线:1:${!l:party[3]}" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionLogMessage Async="True" Message="U7b1_连线:1:${!l:party[4]}" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionPlaceholder ExecDelay="2.30 * 1000" Async="True" />
+                      <ActionLogMessage Async="True" Message="[21:39:03.811] TargetIcon 1B:40018966:凯夫卡:0000:0000:02A1:40018966:0000:0000" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionLogMessage Enabled="False" Async="True" Message="[21:39:03.811] TargetIcon 1B:40018966:凯夫卡:0000:0000:02A2:40018966:0000:0000" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionLogMessage Async="True" Message="[21:39:03.811] TargetIcon 1B:${!l:party[3]}:队员:0000:0000:0080:${!l:party[3]}:0000:0000" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionLogMessage Async="True" Message="[21:39:03.811] TargetIcon 1B:${!l:party[8]}:队员:0000:0000:0080:${!l:party[8]}:0000:0000" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionLogMessage Async="True" Message="[21:39:03.899] 263 107:4001898A:BA98:99.992:99.992:0.198:-0.785" ProcessAsLogline="True" AddToACTEncounter="True" />
+                      <ActionLogMessage Async="True" Message="[21:39:03.899] 263 107:4001898B:BA98:99.992:99.992:0.198:2.356" ProcessAsLogline="True" AddToACTEncounter="True" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="c3c2d67c-33c2-4b39-8d67-522467631db9" Name="4.1 播报魔法（冰火）" RegularExpression="^U7b11a_魔法:b真冰:(?&lt;b真冰&gt;[01]):b散:(?&lt;b散&gt;[01]):b冰主斜:(?&lt;b冰主斜&gt;[01]):b击退:(?&lt;b击退&gt;[01])">
+                    <Actions>
+                      <ActionPlaceholder Async="True" Desc="按 TH 分组" DescOverride="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊:b散:${b散}:dirN4:${n: ${!v:myIdx_isTH} ? (${b冰主斜} ? 1 : 0) : (${b冰主斜} ? 3 : 2) }" ProcessAsLogline="True">
+                        <Condition Grouping="And">
+                          <ConditionSingle L="${!pd:U7b_cfg.get(P1冰火_b按击退分组, 1)}" Op="NumericFalse" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage Message="tts:0:${if: ${b击退} ? 击退到 : 直接去 }${?d: 00 = 右下, 01 = 右上, 10 = 左上, 11 = 左下 [${!v:myIdx_isTH}${b冰主斜}] }${if: ${b散} ? 分散 : 分摊 }" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${!pd:U7b_cfg.get(P1冰火_b按击退分组, 1)}" Op="NumericFalse" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionPlaceholder Async="True" Desc="按 击退 分组" DescOverride="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_散摊:b散:${b散}:dirN4:${n: ${b击退} ? (${b冰主斜} ? 1 : 2) : (${b冰主斜} ? 3 : 0) }" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${!pd:U7b_cfg.get(P1冰火_b按击退分组, 1)}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionLogMessage Message="tts:0:${if: ${b击退} ? 击退到 : 直接去 }${?d: 00 = 左上, 01 = 右上, 10 = 右下, 11 = 左下 [${b击退}${b冰主斜}] }${if: ${b散} ? 分散 : 分摊 }" ProcessAsLogline="True">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${!pd:U7b_cfg.get(P1冰火_b按击退分组, 1)}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                      <ActionPlaySpeech ExecDelay="4500" Async="True" Message="横排站位" />
+                      <ActionPlaceholder ExecDelay="800" Async="True" />
+                      <ActionPlaceholder Async="True" Desc="点位为保证场外激光宽度 4.5 m 时刚好安全的位置（实际 3 m）" DescOverride="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_横排点位:role:1:dx:-2.25" ProcessAsLogline="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_横排点位:role:2:dx:-6.81" ProcessAsLogline="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_横排点位:role:3:dx:-11.45" ProcessAsLogline="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_横排点位:role:4:dx:-16.25" ProcessAsLogline="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_横排点位:role:5:dx:2.25" ProcessAsLogline="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_横排点位:role:6:dx:6.81" ProcessAsLogline="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_横排点位:role:7:dx:11.45" ProcessAsLogline="True" />
+                      <ActionLogMessage DescBackColor="ffd" Message="_U7b11a_横排点位:role:8:dx:16.25" ProcessAsLogline="True" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="5fd20e32-a47d-45ac-9c8b-00bb504be868" Name="[F] 横排点位" RegularExpression="^_U7b11a_横排点位:role:(?&lt;role&gt;[1-8]):dx:(?&lt;dx&gt;[^:]+)">
+                    <Actions>
+                      <ActionNamedCallback Async="True" DescBackColor="ffd" Name="PictoACT" Parameter="Tag: U7b11a_横排&#13;&#10;Omen: m0532om_don01x&#13;&#10;t: 5&#13;&#10;O: 100, 100, 0&#13;&#10;Pos: ${dx}, 0, 0.05&#13;&#10;ScaleCyl: 1, 30&#13;&#10;Color: ${if: (${role} - ${!v:myIdx}) %% 4 = 0 ? 1, 1, 2, 5 : 3, 0.7, 0.4, 2 }" />
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="6e1ac7bd-12ab-41ae-b111-7bf3c14e2627" Name="[F] 分散/分摊点位" RegularExpression="^_U7b11a_散摊点位:b散:(?&lt;b散&gt;[01]):dir4:(?&lt;dir4&gt;[0-3]):b自:(?&lt;b自&gt;[01]):xy:(?&lt;x&gt;[^:]*):(?&lt;y&gt;[^:]*)">
+                    <Actions>
+                      <ActionNamedCallback Async="True" DescBackColor="ffd" Name="PictoACT" Parameter="Tag: U7b11a_散摊&#13;&#10;Omen: m0532om_don01x&#13;&#10;t: 5.1&#13;&#10;O: 100, 100, 0&#13;&#10;Dir4: ${dir4}&#13;&#10;Pos: ${x}, ${y}, 0.1&#13;&#10;ScaleCyl: ${b散} ? 1 : 4, 30&#13;&#10;Color: ${if: ${b自} ? 1, 1, 2, 5 : 3, 0.7, 0.4, 2 }" />
+                      <ActionNamedCallback Async="True" DescBackColor="ffd" Name="PictoACT" Parameter="Tag: U7b11a_散摊_指向&#13;&#10;Omen: m131om_setu0f&#13;&#10;t: 5.1&#13;&#10;O: 100, 100, 0&#13;&#10;Dir4: ${dir4}&#13;&#10;Target: ${x}, ${y}&#13;&#10;Scale: 0.2, _d, 0.2&#13;&#10;Color: 1, 1, 2, 2">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b自}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionNamedCallback>
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="1fccbaec-1446-4533-a022-3d58a629cb35" Name="4.2 分散标记" RegularExpression="^U7b11a_魔法:b真冰:(?&lt;b真冰&gt;[01]):b散:(?&lt;b散&gt;[01]):b冰主斜:(?&lt;b冰主斜&gt;[01]):b击退:(?&lt;b击退&gt;[01])">
+                    <Actions>
+                      <ActionNamedCallback ExecDelay="3500" Async="True" DescTextColor="26f" Name="InvokeOnMultipleEntities" Parameter="IsPlayer = 1&#13;&#10;LockOn, _address, loc05sp_05af, 1.5">
+                        <Condition Grouping="Or">
+                          <ConditionSingle L="${b散}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionNamedCallback>
+                    </Actions>
+                  </Trigger>
+                  <Trigger Enabled="true" Id="8b8c5cb4-9cc7-42c4-b109-2c18629e766c" Name="2.3 记录火分散/分摊 =&gt; 3" RegularExpression="^.{15}\S+ 1B:(?&lt;tid&gt;1.{7}):[^:]*:[^:]*:[^:]*:(?&lt;type&gt;007F|0080):" PeriodRefire="Deny" RefirePeriodExpression="1000">
+                    <Actions>
+                      <ActionPlaceholder Async="True" Desc="phase&#13;&#10;" DescOverride="True" />
+                      <ActionVariableScalar Operation="SetNumeric" Name="U7b11a_b散raw" Value="0x${type} = 0x007F" />
+                      <ActionLogMessage Message="_U7b11a_魔法" ProcessAsLogline="True" AddToACTEncounter="True">
+                        <Condition Grouping="And">
+                          <ConditionSingle L="${ev:U7b11a_b真冰}" Op="NumericTrue" />
+                          <ConditionSingle L="${ev:U7b11a_b真火}" Op="NumericTrue" />
+                          <ConditionSingle L="${ev:U7b11a_b散raw}" Op="NumericTrue" />
+                        </Condition>
+                      </ActionLogMessage>
+                    </Actions>
+                    <Condition Grouping="Or">
+                      <ConditionSingle L="${v:U7b_phase}" TypeL="String" R="${env:phase}" TypeR="String" Op="StringEqualNocase" />
+                    </Condition>
+                  </Trigger>
+                </Triggers>
+              </Folder>
+            </Folders>
+          </Folder>
+        </Folders>
+        <RegisteredVariables>
+          <Variable Name="bby._Key" Value="U7b" LoadWhenActive="true" />
+          <Variable Name="bby._PartySize" Value="8" LoadWhenActive="true" />
+          <Variable Name="bby._PartyMode" Value="Party" LoadWhenActive="true" />
+          <Variable Name="bby._CactbotNames" Value="DancingMadUltimate" LoadWhenActive="true" />
+          <Variable Name="bby._InitWaymarks" Value="Action: Circle&#13;&#10;O: 100, 100&#13;&#10;Waymarks: A1D4C3B2&#13;&#10;R: 12&#13;&#10;R2: 12*√2" LoadWhenActive="true" />
+          <Variable Name="bby._彩蛋技能IDs" Value="0xC403, 0xBCF2, 0xBA94, 0xBA9E, 0xBAA2, 0xBAA6, 0xBAA1, 0xC622, 0xC24B, 0xBAB9, 0xBAB5, 0xBAB6, &#13;&#10;0xC24C, 0xBABC, 0xBAD3, 0xBADD, 0xBAD2, 0xBADF, 0xBACD, 0xC3F7, &#13;&#10;0xBAF2, 0xBAFD, 0xBAFE, 0xBB00, 0xBB13, 0xBAE3, 0xBAE6, 0xBAFB, 0xBAFC, 0xBB01, 0xBAEC, 0xBD66, 0xBAEF, 0xC2DC, 0xBB14, 0xC395, 0xC396, 0xC394, 0xC392, 0xC24A, &#13;&#10;0xBB40, 0xBB4F, 0xBB50, 0xBB53, 0xBB56, 0xBB42, 0xC24E, 0xBB3B, 0xBB3E, 0xBB37, 0xBB39, 0xBB3A" LoadWhenActive="true" />
+          <Variable Name="bby.U7b.Alias" Value="U7b, 绝妖星, 妖星, dmu, yaoxing, kefka" />
+          <Variable Name="bby.U7b.Version" Value="1.0.6" />
+          <Variable Name="bby.U7b.CfgScript" Value="using System;&#13;&#10;using System.Drawing;&#13;&#10;using System.Linq;&#13;&#10;using System.Threading;&#13;&#10;using System.Windows.Forms;&#13;&#10;using Triggernometry.Core;&#13;&#10;using Triggernometry.PluginBridges;&#13;&#10;using Triggernometry.UI.CustomControls;&#13;&#10;using Triggernometry.UI.Forms;&#13;&#10;using static Triggernometry.Core.Scripting.ScriptHelper;&#13;&#10;using static Triggernometry.UI.Forms.GameConfigForm;&#13;&#10;&#13;&#10;const string KEY = &quot;U7b&quot;;&#13;&#10;var version = GetRegisteredVariable($&quot;bby.{KEY}.Version&quot;) ??&#13;&#10;    throw new InvalidOperationException($&quot;缺少注册变量 bby.{KEY}.Version，无法注册配置窗口。&quot;);&#13;&#10;&#13;&#10;var info = new ConfigInfo(&quot;绝妖星宝宝椅&quot;, version, &quot;阿洛&quot;, $&quot;{KEY}_cfg&quot;);&#13;&#10;&#13;&#10;RealPlugin.Instance.RegisterNamedCallback(&#13;&#10;    info.ConfigName,&#13;&#10;    new Action&lt;object, string&gt;((_, __) =&gt; ShowConfig(info, U7bEntry.Setup)));&#13;&#10;&#13;&#10;public static class U7bEntry&#13;&#10;{&#13;&#10;    static Color Blue = Color.FromArgb(0x22, 0x66, 0xff);&#13;&#10;&#13;&#10;    public static void Setup(GameConfigForm form)&#13;&#10;    {&#13;&#10;        var info = form.Info;&#13;&#10;&#13;&#10;        BijectDictionary&lt;string, string&gt; cbxItems;&#13;&#10;        Option optionCtrl;&#13;&#10;        Label label;&#13;&#10;        string hint = &quot;&quot;;&#13;&#10;&#13;&#10;        #region 配置：特效&#13;&#10;&#13;&#10;        OptionsTableLayoutPanel tableVfx = form.AddOptionGroup(&quot; 特效 &quot;);&#13;&#10;&#13;&#10;        hint = &quot;仅在单独出现时绘制，以防习惯性去空白地板；\n冰雷组合技不会绘制，而是直接标记安全区。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;　[真假冰/雷] 单独出现时绘制危险区&quot;, &quot;冰雷_bOmen&quot;, true, hint);&#13;&#10;        form.AddOption(optionCtrl, tableVfx);&#13;&#10;&#13;&#10;        hint = &quot;根据 Boss 位置拟合计算，站在月环内可保证不会击退到场外。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;　[P3 击退] 以月环绘制击退危险范围&quot;, &quot;P3击退_月环_bOmen&quot;, true, hint);&#13;&#10;        form.AddOption(optionCtrl, tableVfx);&#13;&#10;&#13;&#10;        hint = &quot;在每个黑洞下方绘制实际危险区。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;　[P3 黑洞] 绘制黑洞危险区&quot;, &quot;P3黑洞_bOmen&quot;, true, hint);&#13;&#10;        form.AddOption(optionCtrl, tableVfx);&#13;&#10;&#13;&#10;        hint = &quot;缩小场内不可能有连线的八个黑洞。\n不建议在关闭黑洞危险区时开启此选项。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;　[P3 黑洞] 缩小场内黑洞&quot;, &quot;P3黑洞_bScaling&quot;, true, hint);&#13;&#10;        form.AddOption(optionCtrl, tableVfx);&#13;&#10;&#13;&#10;        hint = &quot;沿地火前进方向画出白色辅助线，两个方向辅助线交点即为备选安全点。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;　[P5 地火] 开启斜向辅助线&quot;, &quot;P5地火_辅助线_bOmen&quot;, true, hint);&#13;&#10;        form.AddOption(optionCtrl, tableVfx);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;0&quot;, &quot; 0（禁用）&quot;),&#13;&#10;            (&quot;0.5&quot;, &quot; 0.5&quot;),&#13;&#10;            (&quot;1.0&quot;, &quot; 1.0&quot;),&#13;&#10;            (&quot;1.5&quot;, &quot; 1.5&quot;),&#13;&#10;            (&quot;2.0&quot;, &quot; 2.0&quot;)&#13;&#10;        );&#13;&#10;        hint = &quot;加深中心紫圈边缘的紫色，防止紫圈与目标圈重合而看不清危险区。\n数值越大效果越明显。&quot;;&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[P5 软狂暴] 中心紫圈高亮特效的深度&quot;, &quot;P5软狂暴_中心紫圈α&quot;, cbxItems, &quot;1.0&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableVfx);&#13;&#10;&#13;&#10;        #endregion 配置：特效&#13;&#10;&#13;&#10;        #region 配置：P5&#13;&#10;&#13;&#10;        OptionsTableLayoutPanel tableP5 = form.AddOptionGroup(&quot; P5 &quot;);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;0,14,4,8,6,10,2,12&quot;, &quot; 绝伊甸 P1 雾龙站位（正八方）&quot;),&#13;&#10;            (&quot;1,15,5,11,7,9,3,13&quot;, &quot; 绝欧米茄 P1 分散站位（斜八方）&quot;)&#13;&#10;        );&#13;&#10;        hint = &quot;绝伊甸站位：正北逆时针 MT D3 H1 D1 H2 D2 D4 ST\n绝欧米茄站位：正北逆时针 MT D3 H1 D1 D2 H2 D4 ST&quot;;&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[癫狂] 八方站位&quot;, &quot;P5癫狂_pIdx至dir16&quot;, cbxItems, &quot;0,14,4,8,6,10,2,12&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP5);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;同色顺&quot;, &quot; 去火塔顺时针方向&quot;),&#13;&#10;            (&quot;同色逆&quot;, &quot; 去火塔逆时针方向&quot;),&#13;&#10;            (&quot;火雷冰&quot;, &quot; 固定找雷&quot;),&#13;&#10;            (&quot;火冰雷&quot;, &quot; 固定找冰&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[三星] 火易伤组首轮找塔方式&quot;, &quot;P5三星_易伤strat&quot;, cbxItems, &quot;同色顺&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableP5);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;1&quot;, &quot; 偏顺时针 / 面向场外偏右&quot;),&#13;&#10;            (&quot;0&quot;, &quot; 偏逆时针 / 面向场外偏左&quot;)&#13;&#10;        );&#13;&#10;        hint = &quot;二者中偏顺时针的塔 = 从正北逆时针开始找的第一座双塔，反之同理&quot;;&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[三星] 闲人组踩同色双塔中哪一个&quot;, &quot;P5三星_闲人b偏顺&quot;, cbxItems, &quot;1&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP5);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;自动&quot;, &quot; 按照职能自动分配&quot;),&#13;&#10;            (&quot;中&quot;, &quot; 中心 ○&quot;),&#13;&#10;            (&quot;上&quot;, &quot; 正上 ↑&quot;),&#13;&#10;            (&quot;下&quot;, &quot; 正下 ↓&quot;),&#13;&#10;            (&quot;左&quot;, &quot; 正左 ←&quot;),&#13;&#10;            (&quot;右&quot;, &quot; 正右 →&quot;),&#13;&#10;            (&quot;左上&quot;, &quot; 左上 ↖&quot;),&#13;&#10;            (&quot;右上&quot;, &quot; 右上 ↗&quot;),&#13;&#10;            (&quot;左下&quot;, &quot; 左下 ↙&quot;),&#13;&#10;            (&quot;右下&quot;, &quot; 右下 ↘&quot;),&#13;&#10;            (&quot;无&quot;, &quot; 禁用指路&quot;)&#13;&#10;        );&#13;&#10;        hint = &quot;此选项代表两步法地火会使用到的四个格点的位置。\n\n&quot; +&#13;&#10;            &quot;默认按职能分配不同站位，以防多人挤在一起难以分散：\n&quot; +&#13;&#10;            &quot;· T/近战：中心（目标圈内四个格点）\n&quot; +&#13;&#10;            &quot;· D3：正上（目标圈偏北四个格点）\n&quot; +&#13;&#10;            &quot;· D4：正下（目标圈偏南四个格点）\n&quot; +&#13;&#10;            &quot;· H1: 正左（目标圈偏西四个格点）\n&quot; +&#13;&#10;            &quot;· H2: 正右（目标圈偏东四个格点）\n&quot; +&#13;&#10;            &quot;其中 MT ST D1 D2 最终分别去目标圈内上下左右；远程在自己方向上出去分散。\n\n&quot; +&#13;&#10;            &quot;你也可以选择起跑点，覆盖默认选项。\n&quot; +&#13;&#10;            &quot;其中四个斜方向完全不与中心重合，可完全避免分散冲突；\n&quot; +&#13;&#10;            &quot;但外侧两个点比较靠近场边，请自行取舍。&quot;;&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[地火] 两步指路选用的大致方向（详见悬停说明）&quot;, &quot;P5地火_方向&quot;, cbxItems, &quot;自动&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP5);&#13;&#10;&#13;&#10;        #endregion 配置：P5&#13;&#10;&#13;&#10;        #region 配置：P3&#13;&#10;&#13;&#10;        OptionsTableLayoutPanel tableP3 = form.AddOptionGroup(&quot; P3 &quot;);&#13;&#10;&#13;&#10;        hint = @&quot;仅会在以下三种情况下自动切换目标：&#13;&#10;· 刚获取决战 debuff 时选择的是错误的 Boss；&#13;&#10;· 对错误的 Boss 产生了单体伤害；&#13;&#10;· 从非 Boss 目标（如未选中目标或选中玩家）切换至错误 Boss。&#13;&#10;&#13;&#10;不会阻止从正确的 Boss 切换目标至另一个 Boss。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;　[防火墙] 启用目标自动切换&quot;, &quot;P3防火墙_b切目标&quot;, true, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        hint = @&quot;播报频道为配置中的“公开频道”。\n这不意味着此频道必须公开可见，你可以将公开频道设为默语。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;　[防火墙] 文本播报队友打到无敌目标&quot;, &quot;P3防火墙_b播报队友&quot;, true, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;正攻&quot;, &quot; 正攻（盗火）&quot;),&#13;&#10;            (&quot;逃课火&quot;, &quot; 逃课（全员火法阵集合）&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[一运] 水火风机制解法&quot;, &quot;P3一运_strat&quot;, cbxItems, &quot;逃课火&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;跟随&quot;, &quot; 跟随第二轮转向&quot;),&#13;&#10;            (&quot;顺&quot;, &quot; 固定偏顺时针&quot;),&#13;&#10;            (&quot;逆&quot;, &quot; 固定偏逆时针&quot;)&#13;&#10;        );&#13;&#10;        hint = &quot;去自己麻将点名所对应的直条分身的正对面后，需要偏 22.5°（即去正斜点之间），选择此偏转方向的确定方式。&quot;;&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[麻将] 引导位置偏向&quot;, &quot;P3麻将_偏向&quot;, cbxItems, &quot;跟随&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;固定&quot;, &quot; 固定式（1 无污泥 TH，2 无污泥 D，3 污泥）&quot;),&#13;&#10;            (&quot;1,2,3,4,5,6,7,8&quot;, &quot; 优先级 MT &gt; ST &gt; H12 &gt; D1-4&quot;),&#13;&#10;            (&quot;2,1,3,4,5,6,7,8&quot;, &quot; 优先级 ST &gt; MT &gt; H12 &gt; D1-4&quot;),&#13;&#10;            (&quot;1,2,7,8,3,4,5,6&quot;, &quot; 优先级 MT &gt; ST &gt; D1-4 &gt; H12&quot;),&#13;&#10;            (&quot;2,1,7,8,3,4,5,6&quot;, &quot; 优先级 ST &gt; MT &gt; D1-4 &gt; H12&quot;),&#13;&#10;            (&quot;3,4,1,2,5,6,7,8&quot;, &quot; 优先级 H12 &gt; MT &gt; ST &gt; D1-4&quot;),&#13;&#10;            (&quot;3,4,2,1,5,6,7,8&quot;, &quot; 优先级 H12 &gt; ST &gt; MT &gt; D1-4&quot;),&#13;&#10;            (&quot;7,8,1,2,3,4,5,6&quot;, &quot; 优先级 H12 &gt; D1-4 &gt; MT &gt; ST&quot;),&#13;&#10;            (&quot;8,7,1,2,3,4,5,6&quot;, &quot; 优先级 H12 &gt; D1-4 &gt; ST &gt; MT&quot;),&#13;&#10;            (&quot;7,8,5,6,1,2,3,4&quot;, &quot; 优先级 D1-4 &gt; H12 &gt; MT &gt; ST&quot;),&#13;&#10;            (&quot;8,7,5,6,1,2,3,4&quot;, &quot; 优先级 D1-4 &gt; H12 &gt; ST &gt; MT&quot;),&#13;&#10;            (&quot;7,8,6,5,4,3,2,1&quot;, &quot; 优先级 D4-1 &gt; H21 &gt; MT &gt; ST&quot;),&#13;&#10;            (&quot;8,7,6,5,4,3,2,1&quot;, &quot; 优先级 D4-1 &gt; H21 &gt; ST &gt; MT&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[黑洞] 每组点名内分配 1-3 的方式&quot;, &quot;P3黑洞_pIdx至prio&quot;, cbxItems, &quot;固定&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        hint = @&quot;· 标号说明：&#13;&#10;　一组攻击 1-3、二组锁链 1-3、三组禁止 1-2；如果被覆盖会尝试标回来。&#13;&#10;&#13;&#10;　· 若开启自动摇号：&#13;&#10;　　会按照上述选用的规则固定为自己摇号并依此播报；&#13;&#10;　　被其他人覆盖会重新标回来，请勿在队内开启了指挥标点时开启此选项。&#13;&#10;&#13;&#10;　· 若未开启自动摇号：&#13;&#10;　　会按照上述选用的规则指定自身默认接线顺序并播报；&#13;&#10;　　被其他人标点后会根据标点覆盖默认接线顺序。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;　[黑洞] 自动摇号（必读提示）&quot;, &quot;P3黑洞_b摇号&quot;, false, hint);&#13;&#10;        optionCtrl.Lbl.ForeColor = Blue;&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;黑洞顺&quot;, &quot; 面向三个黑洞顺时针&quot;),&#13;&#10;            (&quot;黑洞逆&quot;, &quot; 面向三个黑洞逆时针&quot;),&#13;&#10;            (&quot;Boss顺&quot;, &quot; 场外凯夫卡开始顺时针&quot;),&#13;&#10;            (&quot;Boss逆&quot;, &quot; 场外凯夫卡开始逆时针&quot;),&#13;&#10;            (&quot;正北顺&quot;, &quot; 正北开始顺时针&quot;),&#13;&#10;            (&quot;正北逆&quot;, &quot; 正北开始逆时针&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[黑洞] 1-3 号分配黑洞的顺序&quot;, &quot;P3黑洞_方向排序&quot;, cbxItems, &quot;Boss顺&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;0&quot;, &quot; 全员接一根&quot;),&#13;&#10;            (&quot;1&quot;, &quot; 一组 1 号、三组 2 号接两根&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[黑洞] 接线方式&quot;, &quot;P3黑洞_b双线&quot;, cbxItems, &quot;0&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;1&quot;, &quot; 顺时针&quot;),&#13;&#10;            (&quot;0&quot;, &quot; 逆时针&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[黑洞] 拉线方向&quot;, &quot;P3黑洞_b拉线顺&quot;, cbxItems, &quot;1&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableP3);&#13;&#10;&#13;&#10;        #endregion 配置：P3&#13;&#10;&#13;&#10;        #region 配置：P2&#13;&#10;&#13;&#10;        OptionsTableLayoutPanel tableP2 = form.AddOptionGroup(&quot; P2 &quot;);&#13;&#10;        var link = &quot;https://docs.qq.com/doc/DTFBPRkJ0bVFoeGVV&quot;;&#13;&#10;        var label1 = form.AddLabel(&quot;　[遗弃末世]\n　　融合优化 2222 闲人固定 整合解法文档（双击复制链接）\n　　开打前请确认闲人按 TH/D 还是初始扇/钢分组&quot;, tableP2);&#13;&#10;        label1.ForeColor = Blue;&#13;&#10;        label1.DoubleClick += (sender, e) =&gt;&#13;&#10;        {&#13;&#10;            Clipboard.SetText(link);&#13;&#10;            MessageBox.Show(&quot;已复制链接。&quot;, info.Name, MessageBoxButtons.OK, MessageBoxIcon.Information);&#13;&#10;        };&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;0&quot;, &quot; 初始扇形左 初始钢铁右&quot;),&#13;&#10;            (&quot;1&quot;, &quot; TH 左 DPS 右&quot;)&#13;&#10;        );&#13;&#10;        hint = &quot;“闲人” 指的是当前不踩塔的人；指定处理奇数轮分摊/引导扇形、偶数轮超级跳的左右分组方式。\n文档中按照 TH 左 DPS 右固定站位，即站位只和职能相关，省去机制相关的判断；\n但也有现行攻略这里沿用左扇形右钢铁。&quot;;&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[遗弃末世] 闲人处理机制时的左右分组方式&quot;, &quot;P2塔_b闲人TH左D右&quot;, cbxItems, &quot;1&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP2);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;原版&quot;, &quot; 原版站位（分摊在两侧）&quot;),&#13;&#10;            (&quot;近优&quot;, &quot; 近战优化（分摊在前方）&quot;)&#13;&#10;        );&#13;&#10;        hint = &quot;原版站位即为上述文档中站位。&quot;;&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[遗弃末世] 奇数轮的站位&quot;, &quot;P2塔_奇数strat&quot;, cbxItems, &quot;原版&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP2);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;0&quot;, &quot; 正北顺时针找第一个初始三角&quot;),&#13;&#10;            (&quot;1&quot;, &quot; 正北逆时针找第一个初始三角&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[异三角] 双 T 处理死刑的方向&quot;, &quot;P2_b逆找三角&quot;, cbxItems, &quot;1&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableP2);&#13;&#10;        form.AddLabel(&quot;　注：为了给死刑留出充足位置，人群并非固定顺/逆，而是优先选择不与 T 相邻的安全区。&quot;, tableP2);&#13;&#10;        form.AddLabel(&quot;&quot;, tableP2);&#13;&#10;        #endregion 配置：P2&#13;&#10;&#13;&#10;        #region 配置：P1&#13;&#10;&#13;&#10;        OptionsTableLayoutPanel tableP1 = form.AddOptionGroup(&quot; P1 &quot;);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;0&quot;, &quot; TH 左 DPS 右&quot;),&#13;&#10;            (&quot;1&quot;, &quot; 闲人上 击退下&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[真假冰火] 分组方式&quot;, &quot;P1冰火_b按击退分组&quot;, cbxItems, &quot;1&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableP1);&#13;&#10;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;1A&quot;, &quot; 1A 式&quot;),&#13;&#10;            (&quot;1A改&quot;, &quot; 1A 改&quot;),&#13;&#10;            (&quot;方逆&quot;, &quot; 大正方形 逆时针（盗火）&quot;),&#13;&#10;            (&quot;方顺&quot;, &quot; 大正方形 顺时针（美服）&quot;)&#13;&#10;        );&#13;&#10;        hint = &quot;1A 式：同向箭头外正/外斜，异向箭头内正/内斜\n1A 改：同向箭头内斜/外斜，异向箭头内正/外正&quot;;&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[箭头] 解法&quot;, &quot;P1箭头解法&quot;, cbxItems, &quot;方逆&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP1);&#13;&#10;&#13;&#10;        hint = &quot;固定式：正北开始逆时针 H1 MT H2 ST D2 D4 D1 D3&quot;;&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;0&quot;, &quot; 面向 Boss，TH 左 DPS 右&quot;),&#13;&#10;            (&quot;1&quot;, &quot; 固定式 场地基准&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　[真假雷火] 站位&quot;, &quot;P1雷火_b固定&quot;, cbxItems, &quot;1&quot;, hint);&#13;&#10;        form.AddOption(optionCtrl, tableP1);&#13;&#10;&#13;&#10;        #endregion 配置：P1&#13;&#10;&#13;&#10;        #region 配置：通用选项&#13;&#10;&#13;&#10;        OptionsTableLayoutPanel tableGeneral = form.AddOptionGroup(&quot; 通用选项 &quot;);&#13;&#10;&#13;&#10;        // 开场自动标点&#13;&#10;        cbxItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;2&quot;, &quot; 公开标点（北侧顺时针 1A2、半宽 12.0 m 正方形）&quot;),&#13;&#10;            (&quot;1&quot;, &quot; 本地标点（同上，队里使用其他标点时可以本地覆盖掉）&quot;),&#13;&#10;            (&quot;0&quot;, &quot; 不开启标点&quot;)&#13;&#10;        );&#13;&#10;        optionCtrl = new OptionCbx(&quot;　开场自动应用标准场地标点（防内鬼标点）&quot;, &quot;初始场地标点mode&quot;, cbxItems, &quot;2&quot;);&#13;&#10;        form.AddOption(optionCtrl, tableGeneral);&#13;&#10;        /*&#13;&#10;        // P1 校准小队&#13;&#10;        hint = &quot;在……时检查全员站位，如果与设置不符则报错并自动修正。\n魔改站位时不要开。&quot;;&#13;&#10;        optionCtrl = new OptionChk(&quot;开场八方时检查并修正小队&quot;, &quot;P1修复小队on&quot;, true, hint);&#13;&#10;        form.AddOption(optionCtrl, tableGeneral);&#13;&#10;        */&#13;&#10;&#13;&#10;        #endregion 配置：通用选项&#13;&#10;&#13;&#10;&#13;&#10;        #region 配置：文本频道&#13;&#10;        OptionsTableLayoutPanel tableChannel = form.AddOptionGroup(&quot; 文本频道 &quot;);&#13;&#10;        var cnlPublicItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;p&quot;, &quot; 小队&quot;), (&quot;e&quot;, &quot; 默语&quot;)&#13;&#10;        );&#13;&#10;        var cnlDebugItems = new BijectDictionary&lt;string, string&gt;(&#13;&#10;            (&quot;&quot;, &quot; 禁用&quot;), (&quot;e&quot;, &quot; 默语&quot;)&#13;&#10;        );&#13;&#10;&#13;&#10;        OptionCbx cnlPublic = new OptionCbx(&quot;　公共频道&quot;, &quot;cnlPublic&quot;, cnlPublicItems, &quot;e&quot;,&#13;&#10;            hint: &quot;本频道作为播报部分机制、示意图、复盘信息等机制相关内容的默认频道。\n\n默认设为仅自己可见的默语频道，\n如有需要可设为小队等。&quot;);&#13;&#10;        OptionCbx cnlDebug = new OptionCbx(&quot;　调试频道&quot;, &quot;cnlDebug&quot;, cnlDebugItems, &quot;&quot;,&#13;&#10;            hint: &quot;本频道用于发送调试信息，默认不需要启用。\n\n如果你在参与测试，请设置为自己可见的频道。&quot;);&#13;&#10;        form.AddOptions(tableChannel, cnlPublic, cnlDebug);&#13;&#10;        #endregion 配置：文本频道&#13;&#10;&#13;&#10;        #region 使用须知&#13;&#10;&#13;&#10;        OptionsTableLayoutPanel tableInfo = form.AddOptionGroup(&quot; 使用须知 &quot;);&#13;&#10;&#13;&#10;        form.AddLabel(&quot;· 必须在上方正确设置完整的小队列表，否则部分机制无法正常工作。&quot;, tableInfo)&#13;&#10;            .ForeColor = Color.FromArgb(192, 0, 0);&#13;&#10;&#13;&#10;        form.AddLabel(&quot;· 使用前建议查看使用说明，见此绝本触发器分组下的「使用说明」触发器。&quot;, tableInfo)&#13;&#10;            .ForeColor = Blue;&#13;&#10;&#13;&#10;        form.AddLabel(&quot;· 下方部分选项上悬停鼠标可以显示详细说明。&quot;, tableInfo)&#13;&#10;            .ForeColor = Blue;&#13;&#10;&#13;&#10;        #endregion 使用须知&#13;&#10;&#13;&#10;        #region 配置：队员顺序&#13;&#10;        if (BridgeFFXIV.ZoneID == 1363 &amp;&amp; Triggernometry.FFXIV.Entity.GetEntities().Any(e =&gt; e.InParty))&#13;&#10;        {&#13;&#10;            string[] playerDescriptions = { &quot;MT&quot;, &quot;ST&quot;, &quot;H1&quot;, &quot;H2&quot;, &quot;D1&quot;, &quot;D2&quot;, &quot;D3&quot;, &quot;D4&quot; };&#13;&#10;            var pListPanel = new PartyListPanel(playerDescriptions);&#13;&#10;            form.AddPartyGroup(&quot; 队员顺序（拖拽调整） &quot;, pListPanel);&#13;&#10;        }&#13;&#10;        #endregion 配置：队员顺序&#13;&#10;&#13;&#10;    }&#13;&#10;}" />
+          <Variable Name="bby.ZoneID.1363" Value="U7b" />
+        </RegisteredVariables>
+      </Folder>
+    </Folders>
+  </ExportedFolder>
+</TriggernometryExport>

@@ -10,6 +10,8 @@ public sealed class ActHostSupervisor : IAsyncDisposable
 {
     private const int MaximumLogBatchItems = 128;
     private const int MaximumLogBatchCharacters = 64 * 1024;
+    // Only the Host that runs Triggernometry needs lines ordered against entity captures.
+    private readonly HostEntityEpochClock? entityEpochClock;
     private const int MaximumPendingLogs = HostProtocol.DataQueueCapacity;
     private const int MaximumAutomaticMemoryRecoveries = 2;
     private static readonly TimeSpan MemoryRecoveryWindow = TimeSpan.FromMinutes(10);
@@ -64,8 +66,10 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         Func<bool>? matchaEventsEnabled = null,
         bool enableMemoryProtection = false,
         string? packagedHostDirectory = null,
-        Func<string>? pluginDirectoryProvider = null)
+        Func<string>? pluginDirectoryProvider = null,
+        HostEntityEpochClock? entityEpochClock = null)
     {
+        this.entityEpochClock = entityEpochClock;
         assets = new CompatibilityHostAssets(hostDirectory, logger, packagedHostDirectory);
         process = new CompatibilityHostProcess(logger);
         this.ipc = ipc;
@@ -314,7 +318,10 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             Interlocked.Increment(ref droppedPendingLogs);
         }
 
-        pendingLogs.Enqueue(new HostLogEvent(timestamp, rawLine, isImport, actLine));
+        // Stamped when the line is produced, not when its batch leaves: a capture taken while
+        // the line waits for the flush timer already satisfies it.
+        pendingLogs.Enqueue(new HostLogEvent(
+            timestamp, rawLine, isImport, actLine, entityEpochClock?.RequireNextCapture() ?? 0));
         Interlocked.Increment(ref pendingLogCount);
     }
 

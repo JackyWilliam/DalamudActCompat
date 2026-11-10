@@ -284,10 +284,19 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
         foreach (var log in logs)
         {
-            target.ParseRawLogLine(
-                log.IsImport,
-                log.Timestamp.LocalDateTime,
-                string.IsNullOrEmpty(log.ActLine) ? log.Line : log.ActLine);
+            HostPluginBridge.SetCurrentLogEntityEpoch(log.EntityEpoch);
+            try
+            {
+                target.ParseRawLogLine(
+                    log.IsImport,
+                    log.Timestamp.LocalDateTime,
+                    string.IsNullOrEmpty(log.ActLine) ? log.Line : log.ActLine);
+            }
+            finally
+            {
+                HostPluginBridge.SetCurrentLogEntityEpoch(0);
+            }
+
             Interlocked.Increment(ref acceptedLogLines);
         }
     }
@@ -299,6 +308,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
 
     public void ChangeZone(uint territoryId, string zoneName)
     {
+        // Lines still held for an entity capture were produced before this transition.
+        HostPluginBridge.FlushTriggernometryLogOrder();
         var target = actMain;
         target?.ChangeZone(zoneName);
         if (target is not null && pendingCombatStart)
@@ -319,6 +330,8 @@ internal sealed class LegacyPluginRuntime : IDisposable
         {
             return;
         }
+
+        HostPluginBridge.FlushTriggernometryLogOrder();
 
         if (!inCombat)
         {

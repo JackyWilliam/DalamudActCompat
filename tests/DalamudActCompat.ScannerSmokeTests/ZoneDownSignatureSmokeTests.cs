@@ -8,6 +8,9 @@ internal static class ZoneDownSignatureSmokeTests
         // Global 7.57h keeps the 7.57 receive call sites; the exact-version gate once
         // sent it to the pre-7.57 pattern and the parser never started.
         const string hotfix = "2026.10.16.0000.0000";
+        // 7.58 (CN/Global 2026.11.03) still has both 7.57 call-site variants three times
+        // each in the shipped CN executable.
+        const string patch758 = "2026.11.03.0000.0000";
         const string previous = "2026.09.15.0000.0000";
         // Concrete instruction bytes reproduce the failure without loading or hooking a game.
         byte[][] callSites =
@@ -25,8 +28,8 @@ internal static class ZoneDownSignatureSmokeTests
             {
                 var start = (nint)pointer;
                 nint[] Scan(string signature, int count) => MultiSigScanner.Scan(start, bytes.Length, signature, count);
-                string[] accepted = variant == 2 ? [previous] : [current, hotfix];
-                string[] rejected = variant == 2 ? [current, hotfix] : [previous];
+                string[] accepted = variant == 2 ? [previous] : [current, hotfix, patch758];
+                string[] rejected = variant == 2 ? [current, hotfix, patch758] : [previous];
                 foreach (var version in accepted)
                     Check(ZoneDownSignatureResolver.Resolve(version, Scan) == start + 144,
                         $"The zone channel for {version} must be the third complete receive match.");
@@ -46,7 +49,7 @@ internal static class ZoneDownSignatureSmokeTests
             throw new Exception("An unrelated scanner error was swallowed.");
         }
         catch (InvalidOperationException ex) when (ex.Message == "scanner failure") { }
-        Console.WriteLine("7.57/7.57h receive signatures: both published variants, old client, channel selection and missing/partial failures passed.");
+        Console.WriteLine("7.57/7.57h/7.58 receive signatures: both published variants, old client, channel selection and missing/partial failures passed.");
     }
 
     private static void ExpectMissing(Action action)

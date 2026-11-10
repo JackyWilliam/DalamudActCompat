@@ -450,6 +450,7 @@
   "Friend request not found.": "好友申請不存在。",
   "Friend request processed.": "好友申請已處理。",
   "Friend service connected.": "好友服務已連線。",
+  "The chat data saved on this computer could not be read (it may come from another computer or Windows account). It was set aside and chat started fresh; check the chat history for any message whose delivery was unconfirmed.": "本機儲存的聊天暫存資料無法讀取（可能來自另一台電腦或系統帳號），已另存並重新開始；未確認送出的訊息請以聊天記錄為準。",
   "Friends": "好友",
   "Friends are not available on this server yet. Account and cloud sync remain available.": "伺服器暫未開放好友功能，帳號與雲端同步仍可正常使用。",
   "Friends · {0} online{1}": "好友 · {0} 人線上{1}",
