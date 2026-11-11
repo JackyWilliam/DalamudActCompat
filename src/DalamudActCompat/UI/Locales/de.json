@@ -2078,5 +2078,11 @@
   "Every time the control center opens": "Bei jedem Öffnen des Kontrollzentrums",
   "Click the animation to skip it.": "Ein Klick auf die Animation überspringt sie.",
   "Needs permission": "Berechtigung nötig",
-  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "Benötigt die Berechtigung „{0}“ zum Starten: unter Berechtigungen einschalten, dann startet die Erweiterung neu."
+  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "Benötigt die Berechtigung „{0}“ zum Starten: unter Berechtigungen einschalten, dann startet die Erweiterung neu.",
+  "Hide timing": "Zeitpunkt",
+  "Immediately": "Sofort",
+  "After {0} s": "Nach {0} s",
+  "After {0} min": "Nach {0} Min.",
+  "When to hide after combat. With After 30 s and the like, the window stays up for a while so the last pull can be read; re-entering combat keeps it shown.": "Wann das Fenster nach dem Kampf ausgeblendet wird. Mit „Nach 30 s“ und Ähnlichem bleibt es noch eine Weile sichtbar, damit Sie den letzten Pull lesen können; ein erneuter Kampf hält es sichtbar.",
+  "With Hide out of combat on, the choice next to it sets how long after combat the window hides, for example After 30 s, so the last pull can still be read. Hide timing on the Overlays page works the same way.": "Wenn »Außerhalb des Kampfes ausblenden« aktiv ist, legen Sie daneben fest, wie lange nach dem Kampf das Fenster ausgeblendet wird, etwa „Nach 30 s“, damit der letzte Pull lesbar bleibt. »Zeitpunkt« auf der Overlay-Seite funktioniert genauso."
 }

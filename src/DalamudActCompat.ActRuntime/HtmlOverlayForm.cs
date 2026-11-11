@@ -557,11 +557,19 @@ internal sealed class HtmlOverlayForm : IDisposable
     private volatile bool desiredVisible;
     private volatile bool temporarilyHidden;
     private volatile bool inCombat;
+    // Environment.TickCount64 when combat last ended; -1 before the first combat.
+    private long lastInCombatTicks = -1;
+    private readonly object autoHideTimerLock = new();
+    private System.Threading.Timer? autoHideTimer;
+
+    private long? LastInCombat => Volatile.Read(ref lastInCombatTicks) is var ticks && ticks >= 0 ? ticks : null;
 
     // Editing must remain visible even between battles; foreground suppression still wins.
     private bool EffectiveHidden
         => temporarilyHidden || settings?.IsUserHidden == true ||
-           (settings is { AutoHideOutOfCombat: true, IsEditing: false } && !inCombat);
+           (settings is { IsEditing: false } current &&
+            CombatAutoHidePolicy.IsHidden(current.AutoHideOutOfCombat, current.AutoHideDelaySeconds,
+                inCombat, LastInCombat, Environment.TickCount64));
     private bool disposing;
     private bool applyingSettings;
     private bool loaderAcquired;
@@ -809,8 +817,30 @@ internal sealed class HtmlOverlayForm : IDisposable
     public void SetCombatState(bool value)
     {
         if (inCombat == value) return;
+        // Leaving combat starts the 脱战隐藏 delay.
+        if (!value) Volatile.Write(ref lastInCombatTicks, Environment.TickCount64);
         inCombat = value;
         RefreshTemporaryVisibility();
+        ArmAutoHideTimer();
+    }
+
+    // The delay running out has no event of its own: wake once at that moment so the overlay
+    // hides. Re-armed when the delay setting changes mid-countdown.
+    private void ArmAutoHideTimer()
+    {
+        var current = settings;
+        var remaining = current is { AutoHideOutOfCombat: true } && !inCombat
+            ? CombatAutoHidePolicy.RemainingMilliseconds(current.AutoHideDelaySeconds, LastInCombat, Environment.TickCount64)
+            : 0;
+        if (remaining <= 0) return;
+        lock (autoHideTimerLock)
+        {
+            if (Volatile.Read(ref disposeStarted) != 0) return;
+            autoHideTimer ??= new System.Threading.Timer(static state => ((HtmlOverlayForm)state!).RefreshTemporaryVisibility(), this,
+                System.Threading.Timeout.Infinite, System.Threading.Timeout.Infinite);
+            // A little slack so the check runs after the deadline, not just before it.
+            autoHideTimer.Change(remaining + 50, System.Threading.Timeout.Infinite);
+        }
     }
 
     private void RefreshTemporaryVisibility()
@@ -981,6 +1011,7 @@ internal sealed class HtmlOverlayForm : IDisposable
 
         form.BeginInvoke(ApplyOverlaySettings);
         RefreshTemporaryVisibility();
+        ArmAutoHideTimer();
     }
 
     private void Run()
@@ -2693,6 +2724,12 @@ internal sealed class HtmlOverlayForm : IDisposable
         }
 
         disposing = true;
+        lock (autoHideTimerLock)
+        {
+            autoHideTimer?.Dispose();
+            autoHideTimer = null;
+        }
+
         browserState = BrowserState.Disposing;
         browserStateDetail = "正在关闭";
         lifecycleCancellation.Cancel();

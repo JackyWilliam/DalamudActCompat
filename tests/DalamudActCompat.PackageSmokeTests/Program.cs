@@ -64,6 +64,7 @@ try
     if (args.Contains("--ai-only", StringComparer.Ordinal))
     {
         AiAssistantSmokeTests.Run(testRoot);
+        await AiRelaySmokeTests.RunAsync(testRoot);
         return 0;
     }
     if (args.Contains("--postnamazu-command-only", StringComparer.Ordinal))
@@ -228,6 +229,7 @@ try
         Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
     if (args.Contains("--meter-display-scope-only", StringComparer.Ordinal)) return 0;
     AiAssistantSmokeTests.Run(testRoot);
+    CombatAutoHideSmokeTests.Run();
     EnglishLocalizationSmokeTests.Run();
     UiLanguageSmokeTests.Run();
     HelpWindowSmokeTests.Run();
@@ -336,6 +338,7 @@ try
         "Trigger event ordering regressions failed: " + string.Join("; ", orderingFailures));
     ValidateHostMemoryProtectionPolicy();
     await HostLifecycleSmokeTests.RunAsync(testRoot);
+    await AiRelaySmokeTests.RunAsync(testRoot);
     ValidateVersionedCompatibilityHostExtraction(testRoot);
     await ValidateResourcePackLifecycleAsync(testRoot);
     ValidateSilverDasherPermissionIsolation();
@@ -7014,6 +7017,8 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         ["Version"] = 16,
         ["LogDirectory"] = @"D:\old-computer\network-logs",
         ["ActPluginDirectory"] = @"D:\old-computer\act-plugins",
+        // The old computer pinned its CN client; this one plays the international client.
+        ["GameRegionMode"] = 1,
         ["HistoryLimit"] = 73,
         ["CloudMarker"] = "cloud",
         ["Fflogs"] = new JObject
@@ -7128,6 +7133,7 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         ["Version"] = 16,
         ["LogDirectory"] = localLogDirectory,
         ["ActPluginDirectory"] = localPluginDirectory,
+        ["GameRegionMode"] = 2,
         ["HistoryLimit"] = 12,
         ["CloudMarker"] = "local",
         ["Fflogs"] = new JObject
@@ -7246,6 +7252,7 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         restoredConfiguration["CloudMarker"]?.Value<string>() == "cloud" &&
         restoredConfiguration["LogDirectory"]?.Value<string>() == localLogDirectory &&
         restoredConfiguration["ActPluginDirectory"]?.Value<string>() == localPluginDirectory &&
+        restoredConfiguration["GameRegionMode"]?.Value<int>() == 2 &&
         restoredConfiguration["Fflogs"]?["ClientSecret"]?.Value<string>() == cloudSecret &&
         restoredConfiguration["ActPluginPermissions"]?["triggernometry"]?["HighRiskScript"]?
             .Value<bool>() == true &&

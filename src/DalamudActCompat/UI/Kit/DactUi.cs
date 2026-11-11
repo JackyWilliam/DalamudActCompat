@@ -392,6 +392,28 @@ internal static class DactUi
         return changed;
     }
 
+    // Label on the left, a compact select on the right, lined up with ToggleRow switches. A muted
+    // label marks a setting that belongs to the row above it.
+    public static bool SelectRow(string label, string id, string[] items, ref int selected, float selectWidth = 120, bool muted = false)
+    {
+        bool changed;
+        ImGui.BeginGroup();
+        var start = ImGui.GetCursorScreenPos();
+        var width = ImGui.GetContentRegionAvail().X;
+        var fieldWidth = Math.Min(selectWidth * S, width * .6f);
+        var labelText = string.Join("\n", WrapLines(label, width - fieldWidth - 10 * S));
+        var labelHeight = ImGui.CalcTextSize(labelText).Y;
+        var rowHeight = Math.Max(30 * S, labelHeight + 6 * S);
+        ImGui.SetCursorScreenPos(start + new Vector2(width - fieldWidth, (rowHeight - 30 * S) * .5f));
+        changed = Select(id, items, ref selected, fieldWidth);
+        ImGui.SetCursorScreenPos(start);
+        ImGui.Dummy(new Vector2(width, rowHeight));
+        ImGui.GetWindowDrawList().AddText(new Vector2(start.X, MathF.Round(start.Y + (rowHeight - labelHeight) * .5f)),
+            U32(DactTheme.Foreground(muted ? P.Muted : P.Text)), labelText);
+        ImGui.EndGroup();
+        return changed;
+    }
+
     // ---- Status
 
     public static void Pill(string label, PillTone tone = PillTone.Ok, bool dot = true, float maxWidth = 0)
@@ -695,10 +717,12 @@ internal static class DactUi
 
     private static readonly Dictionary<uint, SelectState> Selects = new();
 
-    public static bool Select(string id, string[] items, ref int selected, float width = 0, bool disabled = false)
+    // pill: the 28 px rounded shape of a chip, for a choice that sits in a row of chips.
+    public static bool Select(string id, string[] items, ref int selected, float width = 0, bool disabled = false, bool pill = false)
     {
         width = width > 0 ? width : ImGui.GetContentRegionAvail().X;
-        var height = 30 * S;
+        var height = (pill ? 28 : 30) * S;
+        var rounding = (pill ? 14 : 6) * S;
         // The chevron is drawn over the right end, so a long label stops short of it.
         var preview = Fit(selected >= 0 && selected < items.Length ? items[selected] : "", width - 44 * S);
         var key = ImGui.GetID(id);
@@ -713,18 +737,18 @@ internal static class DactUi
         var hover = DactMotion.Float(key, !disabled && (ImGui.IsItemHovered() || open) ? 1 : 0, DactMotion.Fast);
         var alpha = disabled ? .45f : 1;
         var draw = ImGui.GetWindowDrawList();
-        if (P.Light) DrawLightSelect(draw, min, max, preview, hover, open, disabled);
+        if (P.Light) DrawLightSelect(draw, min, max, preview, hover, open, disabled, pill ? 14 * S : 8 * S);
         else
         {
             var fill = Vector4.Lerp(Field, Vector4.Lerp(Field, P.Hover, .5f), hover);
             var border = open ? P.Accent : Vector4.Lerp(FieldBorder, P.Accent with { W = .45f }, hover * .6f);
-            draw.AddRectFilled(min, max, U32(fill with { W = fill.W * alpha }), 6 * S);
-            draw.AddRect(min, max, U32(border with { W = border.W * alpha }), 6 * S, ImDrawFlags.None, Math.Max(1, S));
-            DrawText(draw, min + new Vector2(10 * S, 0), height, preview, P.Text with { W = alpha });
+            draw.AddRectFilled(min, max, U32(fill with { W = fill.W * alpha }), rounding);
+            draw.AddRect(min, max, U32(border with { W = border.W * alpha }), rounding, ImDrawFlags.None, Math.Max(1, S));
+            DrawText(draw, min + new Vector2((pill ? 12 : 10) * S, 0), height, preview, P.Text with { W = alpha });
             DactIcons.Draw(draw, open ? "chevronUp" : "chevronDown", new Vector2(max.X - 24 * S, min.Y + (height - 14 * S) * .5f), 14 * S,
                 (open ? P.Accent : P.Muted) with { W = alpha });
         }
-        FocusRing(min, max, P.Light ? 8 : 6);
+        FocusRing(min, max, pill ? 14 : P.Light ? 8 : 6);
         var now = ImGui.GetTime();
         Selects.TryGetValue(key, out var state);
         if (clicked && !disabled)
@@ -798,16 +822,16 @@ internal static class DactUi
     public static readonly Vector4 LightRim = new(.722f, .588f, .408f, 1);
     public static readonly Vector4 LightGlow = new(.886f, .553f, .204f, 1);
 
-    private static void DrawLightSelect(ImDrawListPtr draw, Vector2 min, Vector2 max, string preview, float hover, bool open, bool disabled)
+    private static void DrawLightSelect(ImDrawListPtr draw, Vector2 min, Vector2 max, string preview, float hover, bool open, bool disabled, float rounding)
     {
         var height = max.Y - min.Y;
         var alpha = disabled ? .55f : 1;
         var warm = disabled ? 0 : Math.Max(hover, open ? 1 : 0);
         var fill = Vector4.Lerp(LightCream, LightCreamHover, warm);
-        draw.AddRectFilled(min, max, U32(fill with { W = disabled ? .7f : 1 }), 8 * S);
+        draw.AddRectFilled(min, max, U32(fill with { W = disabled ? .7f : 1 }), rounding);
         // A thin shade under the top edge reads as the game's inset field.
         draw.AddRectFilled(min + new Vector2(2 * S, 1 * S), new Vector2(max.X - 2 * S, min.Y + 3 * S), U32(new Vector4(.45f, .32f, .18f, .10f * alpha)), 2 * S);
-        draw.AddRect(min, max, U32(Vector4.Lerp(LightRim, LightGlow, warm) with { W = alpha }), 8 * S, ImDrawFlags.None, Math.Max(1, S) * (1 + warm * .4f));
+        draw.AddRect(min, max, U32(Vector4.Lerp(LightRim, LightGlow, warm) with { W = alpha }), rounding, ImDrawFlags.None, Math.Max(1, S) * (1 + warm * .4f));
         DrawText(draw, min + new Vector2(12 * S, 0), height, preview, (disabled ? P.Muted : P.Text) with { W = disabled ? .85f : 1 });
         var center = new Vector2(max.X - 17 * S, min.Y + height * .5f);
         var knob = Vector4.Lerp(new Vector4(.478f, .325f, .184f, 1), new Vector4(.584f, .400f, .220f, 1), warm);

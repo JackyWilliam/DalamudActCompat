@@ -1,4 +1,5 @@
 using Dalamud.Game.Command;
+using DalamudActCompat.Ai;
 using Dalamud.Bindings.ImGui;
 using Dalamud.Interface.Windowing;
 using Dalamud.Interface.ImGuiFileDialog;
@@ -384,6 +385,9 @@ public sealed class Plugin : IDalamudPlugin
             packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null,
             pluginDirectoryProvider: () => paths.ActPluginDirectory,
             entityEpochClock: hostEntityEpochClock);
+        // AI 助手 requests leave from a separate Host process so accelerators that capture the
+        // game process (NetEase UU) do not tunnel them into an unsupported region.
+        AiClient.Relay = new AiRelay(hostSupervisor.PrepareExecutable, logger);
         hostSupervisor.CommandRequested += OnHostCommandRequested;
         hostSupervisor.PostNamazuHeadingRequested += OnPostNamazuHeadingRequested;
         hostSupervisor.SilverDasherNotificationRequested += OnSilverDasherNotificationRequested;
@@ -955,6 +959,10 @@ public sealed class Plugin : IDalamudPlugin
         CancelCloudRuntimeSession();
         independentHostStartupCancellation.Cancel();
         bundledPluginUpdateChecker.Dispose();
+        // An in-flight AI request then fails as cancelled instead of outliving this load context.
+        var aiRelay = AiClient.Relay;
+        AiClient.Relay = null;
+        aiRelay?.Dispose();
 
         // CanUnloadAsync invokes Dispose away from the framework thread. Marshal only the
         // short Dalamud/UI detach phase back before awaiting background component shutdown.

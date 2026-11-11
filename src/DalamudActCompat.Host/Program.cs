@@ -11,6 +11,11 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args.Contains(AiRelayProtocol.ModeArgument))
+        {
+            return await AiRelayServer.RunAsync(args).ConfigureAwait(false);
+        }
+
         var options = HostOptions.Parse(args);
         if (string.IsNullOrWhiteSpace(options.PipeName) ||
             string.IsNullOrWhiteSpace(options.SessionId))

@@ -443,6 +443,7 @@ public sealed partial class MeterStyleEditorWindow : Window
         meter.IsLocked = profile.IsLocked;
         meter.ClickThroughWhenLocked = profile.ClickThroughWhenLocked;
         meter.AutoHideOutOfCombat = profile.AutoHideOutOfCombat;
+        meter.AutoHideDelaySeconds = profile.AutoHideDelaySeconds;
         meter.ShowHeader = profile.ShowHeader;
         meter.FontScale = profile.FontScale;
         meter.BackgroundOpacity = profile.BackgroundOpacity;

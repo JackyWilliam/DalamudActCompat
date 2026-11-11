@@ -21,7 +21,8 @@ internal sealed class AiServiceException(string message) : Exception(message);
 // Sends AI 助手 requests straight from the player's PC to the service they chose, with their
 // own key; DACT servers never see the request or the key. Claude goes through the official
 // Anthropic SDK; OpenAI and xAI through their Responses API; every other service through the
-// chat-completions protocol they share.
+// chat-completions protocol they share. All of them travel through AiRelayHandler, which sends
+// them from the AI relay process when one is available (see AiRelayProtocol).
 internal static class AiClient
 {
     // The model used when the player leaves 模型 on 推荐（自动选择） with Claude.
@@ -30,7 +31,20 @@ internal static class AiClient
     // Long enough for a full review in JSON, including reasoning tokens on thinking models.
     private const int MaxOutputTokens = 16000;
 
-    private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(3) };
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromMinutes(3);
+
+    // Set by the plugin once the Host package is known; null sends requests from the game.
+    private static volatile AiRelay? relay;
+
+    internal static readonly AiRelayHandler Transport = new(() => relay);
+
+    private static readonly HttpClient Http = new(Transport, disposeHandler: false) { Timeout = RequestTimeout };
+
+    internal static AiRelay? Relay
+    {
+        get => relay;
+        set => relay = value;
+    }
 
     public static string RecommendedModel(AiSettings settings)
     {
@@ -123,8 +137,12 @@ internal static class AiClient
     {
         ApiKey = key,
         BaseUrl = settings.ResolvedEndpoint,
-        Timeout = TimeSpan.FromMinutes(3),
+        Timeout = RequestTimeout,
         MaxRetries = 2,
+        // A fresh wrapper per client: the SDK may configure the HttpClient it is given, and a
+        // shared instance refuses changes after its first request. Its own 100 s default would
+        // also cut the SDK's 3-minute timeout short, so the SDK alone enforces the limit.
+        HttpClient = new HttpClient(Transport, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan },
     };
 
     private static bool IsOfficialClaudeEndpoint(AiSettings settings)
@@ -180,10 +198,29 @@ internal static class AiClient
         return text.ToString();
     }
 
+    // OpenAI answers 403 unsupported_country_region_territory ("Country, region, or territory
+    // not supported") and Anthropic 403 forbidden "Request not allowed" when a request arrives
+    // from a region they do not serve, e.g. through an accelerator's tunnel into mainland China.
+    // The key is fine, so the old "no permission" wording sent players chasing a broken key.
+    internal const string RegionRefusal =
+        "服务商按地区拒绝了这次请求（Key 本身没问题）：当前网络的出口不在它支持的地区。" +
+        "开着加速器时请改用路由模式或暂时关闭；在国内请改用国内服务商或可用的代理。";
+
+    internal static bool IsRegionRefusal(string? text)
+        => text is not null &&
+           (text.Contains("unsupported_country_region_territory", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("country, region, or territory", StringComparison.OrdinalIgnoreCase) ||
+            text.Contains("Request not allowed", StringComparison.OrdinalIgnoreCase));
+
+    internal static string DescribeForbidden(string? detail)
+        => IsRegionRefusal(detail) ? RegionRefusal
+            : string.IsNullOrWhiteSpace(detail) ? "这个 Key 没有权限使用该模型或接口。"
+            : $"这个 Key 没有权限使用该模型或接口：{Shorten(detail)}";
+
     private static string DescribeClaudeFailure(Exception exception) => exception switch
     {
         AnthropicUnauthorizedException => "API Key 无效：请确认复制完整，没有多余空格。",
-        AnthropicForbiddenException => "这个 Key 没有权限使用该模型或接口。",
+        AnthropicForbiddenException forbidden => DescribeForbidden(forbidden.Message),
         AnthropicNotFoundException => "找不到这个模型或接口，请检查「模型」和「接口地址」。",
         AnthropicRateLimitException => "请求太频繁或额度已用完，请稍后再试，或检查账户余额。",
         AnthropicBadRequestException bad => $"请求被拒绝：{Shorten(bad.Message)}",
@@ -339,7 +376,8 @@ internal static class AiClient
         throw new AiServiceException((int)status switch
         {
             401 => "API Key 无效：请确认复制完整，没有多余空格。",
-            403 => "这个 Key 没有权限使用该模型或接口。",
+            // The region code sits beside the message, so look at the whole body.
+            403 => IsRegionRefusal(body) ? RegionRefusal : DescribeForbidden(detail),
             404 => "找不到这个模型或接口，请检查「模型」和「接口地址」。",
             429 => "请求太频繁或额度已用完，请稍后再试，或检查账户余额。",
             >= 500 => "AI 服务暂时不可用，请稍后再试。",

@@ -2078,5 +2078,11 @@
   "Every time the control center opens": "コントロールセンターを開くたびに再生",
   "Click the animation to skip it.": "再生中にクリックするとスキップできます。",
   "Needs permission": "権限が必要",
-  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "起動には「{0}」の権限が必要です。「権限」でオンにすると拡張機能が自動で再起動します。"
+  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "起動には「{0}」の権限が必要です。「権限」でオンにすると拡張機能が自動で再起動します。",
+  "Hide timing": "タイミング",
+  "Immediately": "すぐに",
+  "After {0} s": "{0} 秒後",
+  "After {0} min": "{0} 分後",
+  "When to hide after combat. With After 30 s and the like, the window stays up for a while so the last pull can be read; re-entering combat keeps it shown.": "戦闘終了後にいつ非表示にするかを選びます。「30 秒後」などにすると戦闘終了後もしばらく表示され、直前の戦闘を確認できます。その間に再び戦闘に入ると表示されたままになります。",
+  "With Hide out of combat on, the choice next to it sets how long after combat the window hides, for example After 30 s, so the last pull can still be read. Hide timing on the Overlays page works the same way.": "「戦闘中以外は非表示」をオンにすると、その横で戦闘終了から非表示までの時間を選べます。たとえば「30 秒後」にすると、直前の戦闘をしばらく確認できます。オーバーレイページの「タイミング」も同じ設定です。"
 }

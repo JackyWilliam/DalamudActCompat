@@ -236,6 +236,12 @@ public sealed partial class MeterStyleEditorWindow
             profile.AutoHideOutOfCombat = autoHide;
             changed = true;
         }
+        var delay = profile.AutoHideDelaySeconds;
+        if (AutoHideDelayField.DrawChip(text, "meter-auto-hide-delay-" + selectedKind, profile.AutoHideOutOfCombat, ref delay))
+        {
+            profile.AutoHideDelaySeconds = delay;
+            changed = true;
+        }
         if (selectedKind == MeterWindowKind.Classic)
         {
             ImGui.SameLine(0, 8 * s);

@@ -3,8 +3,8 @@
     <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
     <AssemblyName>DalamudActCompat</AssemblyName>
     <RootNamespace>DalamudActCompat</RootNamespace>
-    <Version>1.0.0.5</Version>
-    <AssemblyVersion>1.0.0.5</AssemblyVersion>
+    <Version>1.0.0.6</Version>
+    <AssemblyVersion>1.0.0.6</AssemblyVersion>
     <Name>DACT</Name>
     <Author>raynording</Author>
     <Punchline>In-game ACT-compatible parsing platform foundation.</Punchline>
