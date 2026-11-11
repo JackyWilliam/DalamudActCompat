@@ -121,6 +121,23 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             () => FlushMatchaNetworkAsync(lifetime.Token));
     }
 
+    // The Host executable for helper modes such as the AI relay. Null while the Host package
+    // is not in place yet; callers then fall back to working without it.
+    public string? PrepareExecutable()
+    {
+        try
+        {
+            assets.EnsureExtracted();
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"Host executable is not available for helper processes: {ex.Message}");
+            return null;
+        }
+
+        return File.Exists(hostExecutable) ? hostExecutable : null;
+    }
+
     public HostSupervisorSnapshot Snapshot
         => new(
             state,

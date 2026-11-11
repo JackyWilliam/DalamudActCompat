@@ -64,6 +64,7 @@ try
     if (args.Contains("--ai-only", StringComparer.Ordinal))
     {
         AiAssistantSmokeTests.Run(testRoot);
+        await AiRelaySmokeTests.RunAsync(testRoot);
         return 0;
     }
     if (args.Contains("--postnamazu-command-only", StringComparer.Ordinal))
@@ -336,6 +337,7 @@ try
         "Trigger event ordering regressions failed: " + string.Join("; ", orderingFailures));
     ValidateHostMemoryProtectionPolicy();
     await HostLifecycleSmokeTests.RunAsync(testRoot);
+    await AiRelaySmokeTests.RunAsync(testRoot);
     ValidateVersionedCompatibilityHostExtraction(testRoot);
     await ValidateResourcePackLifecycleAsync(testRoot);
     ValidateSilverDasherPermissionIsolation();
