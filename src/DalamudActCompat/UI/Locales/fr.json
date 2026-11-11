@@ -2078,5 +2078,11 @@
   "Every time the control center opens": "À chaque ouverture du centre de contrôle",
   "Click the animation to skip it.": "Cliquez sur l'animation pour la passer.",
   "Needs permission": "Autorisation requise",
-  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "Nécessite l'autorisation « {0} » pour démarrer : activez-la dans Autorisations et l'extension redémarre."
+  "Needs the \"{0}\" permission to start: turn it on under Permissions and the extension restarts.": "Nécessite l'autorisation « {0} » pour démarrer : activez-la dans Autorisations et l'extension redémarre.",
+  "Hide timing": "Moment",
+  "Immediately": "Immédiatement",
+  "After {0} s": "Après {0} s",
+  "After {0} min": "Après {0} min",
+  "When to hide after combat. With After 30 s and the like, the window stays up for a while so the last pull can be read; re-entering combat keeps it shown.": "Quand masquer la fenêtre après le combat. Avec « Après 30 s » et similaires, elle reste affichée un moment pour relire le dernier pull ; reprendre le combat la garde affichée.",
+  "With Hide out of combat on, the choice next to it sets how long after combat the window hides, for example After 30 s, so the last pull can still be read. Hide timing on the Overlays page works the same way.": "Avec « Masquer hors combat » activé, le choix à côté règle le délai de masquage après le combat, par exemple « Après 30 s », pour pouvoir relire le dernier pull. « Moment » sur la page des overlays fonctionne de la même façon."
 }

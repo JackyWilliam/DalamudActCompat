@@ -322,11 +322,8 @@ public sealed partial class ControlCenterWindow
                 if (DactUi.ToggleRow(text.Get("启动时自动打开", "Open on startup"), ref startup)) { settings.OpenOnStartup = startup; changed = true; }
                 var autoHide = settings.AutoHideOutOfCombat;
                 if (DactUi.ToggleRow(text.Get("脱战隐藏", "Hide out of combat"), ref autoHide)) { settings.AutoHideOutOfCombat = autoHide; changed = true; }
-                if (settings.AutoHideOutOfCombat)
-                {
-                    var delay = settings.AutoHideDelaySeconds;
-                    if (AutoHideDelayField.Draw(text, "overlay-auto-hide-delay", ref delay)) { settings.AutoHideDelaySeconds = delay; changed = true; }
-                }
+                var delay = settings.AutoHideDelaySeconds;
+                if (AutoHideDelayField.DrawRow(text, "overlay-auto-hide-delay", settings.AutoHideOutOfCombat, ref delay)) { settings.AutoHideDelaySeconds = delay; changed = true; }
             }
             DactUi.NextColumn();
             using (DactUi.Gap(10))

@@ -350,6 +350,14 @@ internal static class UiBaselineGenerator
                 pageField.SetValue(control, page);
                 ControlCapture($"{page}-默认尺寸", "920×640 默认窗口", false);
                 ControlCapture($"{page}-完整长页", "展开整页内容（游戏内需滚动）", true);
+                if (page.ToString() == "Overlays")
+                {
+                    // 「脱战隐藏」 on with a delay, so the delay setting under it is in view.
+                    var saved = config.OverlayWindows.Values.Select(settings => (settings, settings.AutoHideOutOfCombat, settings.AutoHideDelaySeconds)).ToArray();
+                    foreach (var (settings, _, _) in saved) { settings.AutoHideOutOfCombat = true; settings.AutoHideDelaySeconds = 30; }
+                    ControlCapture("Overlays-脱战隐藏延时", "悬浮窗 · 脱战隐藏打开后的延时设置", false);
+                    foreach (var (settings, autoHide, delay) in saved) { settings.AutoHideOutOfCombat = autoHide; settings.AutoHideDelaySeconds = delay; }
+                }
                 if (page.ToString() == "Friends")
                 {
                     friendSectionField.SetValue(friendsUi, 1);
@@ -602,6 +610,12 @@ internal static class UiBaselineGenerator
                 propertiesTabField.SetValue(editor, 0);
                 Capture("03 战斗统计样式编辑器", kind.ToString(), editor, new(1100, 760), "样式编辑器");
                 if (kind != MeterWindowKind.Classic) continue;
+                var classic = config.Meter.ClassicWindow;
+                var (autoHide, delay) = (classic.AutoHideOutOfCombat, classic.AutoHideDelaySeconds);
+                classic.AutoHideOutOfCombat = true;
+                classic.AutoHideDelaySeconds = 30;
+                Capture("03 战斗统计样式编辑器", "Classic-脱战隐藏延时", editor, new(1100, 760), "样式编辑器 · 脱战隐藏打开后的延时设置");
+                (classic.AutoHideOutOfCombat, classic.AutoHideDelaySeconds) = (autoHide, delay);
                 // 所选槽位 with 职业 / ID selected, like the Figma board.
                 propertiesTabField.SetValue(editor, 1);
                 selectedSlotField.SetValue(editor, config.Meter.ClassicWindow.Slots.First(slot => slot.Metric == MeterSlotMetric.PlayerIdentity).Id);

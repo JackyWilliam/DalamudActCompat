@@ -236,6 +236,12 @@ public sealed partial class MeterStyleEditorWindow
             profile.AutoHideOutOfCombat = autoHide;
             changed = true;
         }
+        var delay = profile.AutoHideDelaySeconds;
+        if (AutoHideDelayField.DrawChip(text, "meter-auto-hide-delay-" + selectedKind, profile.AutoHideOutOfCombat, ref delay))
+        {
+            profile.AutoHideDelaySeconds = delay;
+            changed = true;
+        }
         if (selectedKind == MeterWindowKind.Classic)
         {
             ImGui.SameLine(0, 8 * s);
@@ -248,16 +254,6 @@ public sealed partial class MeterStyleEditorWindow
             if (ImGui.IsItemHovered())
                 DactUi.Tooltip(text.Get("只影响实际统计窗口；页面预览始终展示完整示例队伍。",
                     "Applies to the live meter only; the preview always shows the full sample party."));
-        }
-        if (profile.AutoHideOutOfCombat)
-        {
-            // Its own line: a field does not fit the chip row at narrow editor widths.
-            var delay = profile.AutoHideDelaySeconds;
-            if (AutoHideDelayField.Draw(text, "meter-auto-hide-delay", ref delay))
-            {
-                profile.AutoHideDelaySeconds = delay;
-                changed = true;
-            }
         }
         return changed;
     }
