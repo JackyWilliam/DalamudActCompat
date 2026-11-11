@@ -325,6 +325,10 @@ internal sealed class PortableConfigurationBackupService
             restoredConfiguration,
             "ActPluginDirectory",
             ReadStringProperty(currentConfiguration, "ActPluginDirectory") ?? string.Empty);
+        // The region override describes the game client on this computer. A backup made
+        // beside a CN client must not pin an international one to the CN parser tables, or
+        // the other way round; without a local choice the backup's override is dropped (Auto).
+        KeepLocalProperty(restoredConfiguration, currentConfiguration, "GameRegionMode");
 
         await File.WriteAllTextAsync(
                 restoredConfigurationPath,
@@ -342,6 +346,16 @@ internal sealed class PortableConfigurationBackupService
             return null;
         }
         return token.Value<string>();
+    }
+
+    private static void KeepLocalProperty(JObject restored, JObject? current, string name)
+    {
+        restored.Properties()
+            .Where(property => property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            .ToList()
+            .ForEach(property => property.Remove());
+        if (current is not null && current.TryGetValue(name, StringComparison.OrdinalIgnoreCase, out var token))
+            restored.Add(name, token.DeepClone());
     }
 
     private static void SetStringProperty(JObject document, string name, string value)

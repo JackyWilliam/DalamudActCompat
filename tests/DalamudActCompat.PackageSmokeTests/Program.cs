@@ -7017,6 +7017,8 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         ["Version"] = 16,
         ["LogDirectory"] = @"D:\old-computer\network-logs",
         ["ActPluginDirectory"] = @"D:\old-computer\act-plugins",
+        // The old computer pinned its CN client; this one plays the international client.
+        ["GameRegionMode"] = 1,
         ["HistoryLimit"] = 73,
         ["CloudMarker"] = "cloud",
         ["Fflogs"] = new JObject
@@ -7131,6 +7133,7 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         ["Version"] = 16,
         ["LogDirectory"] = localLogDirectory,
         ["ActPluginDirectory"] = localPluginDirectory,
+        ["GameRegionMode"] = 2,
         ["HistoryLimit"] = 12,
         ["CloudMarker"] = "local",
         ["Fflogs"] = new JObject
@@ -7249,6 +7252,7 @@ static async Task ValidateEncryptedConfigurationBackupAsync(string testRoot)
         restoredConfiguration["CloudMarker"]?.Value<string>() == "cloud" &&
         restoredConfiguration["LogDirectory"]?.Value<string>() == localLogDirectory &&
         restoredConfiguration["ActPluginDirectory"]?.Value<string>() == localPluginDirectory &&
+        restoredConfiguration["GameRegionMode"]?.Value<int>() == 2 &&
         restoredConfiguration["Fflogs"]?["ClientSecret"]?.Value<string>() == cloudSecret &&
         restoredConfiguration["ActPluginPermissions"]?["triggernometry"]?["HighRiskScript"]?
             .Value<bool>() == true &&
