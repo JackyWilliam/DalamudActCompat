@@ -120,6 +120,9 @@ public sealed class MeterSettings
 
     public bool AutoHideOutOfCombat { get; set; }
 
+    // Seconds the meter stays up after combat before 脱战隐藏 hides it; 0 hides at once.
+    public int AutoHideDelaySeconds { get; set; }
+
     public MeterPreset Preset { get; set; } = MeterPreset.CurrentDefault;
 
     public string SelectedCustomStyleId { get; set; } = string.Empty;
@@ -485,6 +488,7 @@ public sealed class MeterSettings
             profile.IsLocked = IsLocked;
             profile.ClickThroughWhenLocked = ClickThroughWhenLocked;
             profile.AutoHideOutOfCombat = AutoHideOutOfCombat;
+            profile.AutoHideDelaySeconds = AutoHideDelaySeconds;
             profile.ShowHeader = ShowHeader;
             profile.FontScale = FontScale;
             profile.SortMode = MeterSortModeOptions.Normalize(SortMode);
@@ -546,6 +550,7 @@ public sealed class MeterSettings
         destination.IsLocked = source.IsLocked;
         destination.ClickThroughWhenLocked = source.ClickThroughWhenLocked;
         destination.AutoHideOutOfCombat = source.AutoHideOutOfCombat;
+        destination.AutoHideDelaySeconds = source.AutoHideDelaySeconds;
         destination.ShowHeader = source.ShowHeader;
         destination.CollapseDirection = source.CollapseDirection;
         destination.FontScale = source.FontScale;

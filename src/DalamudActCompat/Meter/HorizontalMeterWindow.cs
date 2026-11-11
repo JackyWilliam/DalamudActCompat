@@ -4,6 +4,7 @@ using DalamudActCompat.Core.Models;
 using DalamudActCompat.Plugin;
 using DalamudActCompat.UI;
 using System.Numerics;
+using DalamudActCompat.ActRuntime;
 using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.Meter;
@@ -59,11 +60,15 @@ public sealed class HorizontalMeterWindow : Window
             return false;
         }
 
-        var encounter = meterService.DisplayEncounter;
-        return Environment.TickCount64 < locatePreviewExpiresAt ||
-               !Profile.AutoHideOutOfCombat ||
-               encounter?.IsActive == true;
+        var now = Environment.TickCount64;
+        var active = meterService.DisplayEncounter?.IsActive == true;
+        if (active) lastActiveTicks = now;
+        return now < locatePreviewExpiresAt ||
+               !CombatAutoHidePolicy.IsHidden(Profile.AutoHideOutOfCombat, Profile.AutoHideDelaySeconds, active, lastActiveTicks, now);
     }
+
+    // When the displayed encounter was last active; drives the 脱战隐藏 delay.
+    private long? lastActiveTicks;
 
     public void LocateOnNextDraw()
     {

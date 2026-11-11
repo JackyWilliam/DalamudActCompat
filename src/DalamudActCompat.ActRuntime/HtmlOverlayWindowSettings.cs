@@ -33,6 +33,9 @@ public sealed class HtmlOverlayWindowSettings
 
     public bool AutoHideOutOfCombat { get; set; }
 
+    // Seconds the overlay stays up after combat ends before 脱战隐藏 hides it; 0 hides at once.
+    public int AutoHideDelaySeconds { get; set; }
+
     // Manual hiding keeps the page and its subscriptions alive independently of
     // opening/closing, combat suppression and focus suppression.
     public bool IsUserHidden { get; set; }
@@ -117,6 +120,7 @@ public sealed class HtmlOverlayWindowSettings
         IsClickThrough = true;
         IsLocked = true;
         AutoHideOutOfCombat = false;
+        AutoHideDelaySeconds = 0;
         IsUserHidden = false;
         Hotkeys = [];
         ZoomFactor = 1.0f;

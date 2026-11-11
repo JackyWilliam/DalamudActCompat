@@ -510,7 +510,8 @@ public sealed class HelpWindow : Window
                     "On Combat Meter, turn on Show Combat Meter. If you lose the window, click Locate Combat Meter or type /actcompat meter."),
                 text.Get("点「自定义…」打开自定义布局，取消「锁定」后可以拖动、缩放，摆好再锁定。开启「锁定时鼠标穿透」后，点击会穿过统计窗传给游戏。",
                     "Click Customize… to open the layout editor, unlock to move and resize the meter, then lock it again. With Click-through when locked, clicks pass through to the game."),
-                text.Get("「脱战隐藏」只是把窗口藏起来，统计仍在继续。", "Hide out of combat only hides the window; the meter keeps counting."));
+                text.Get("「脱战隐藏」只是把窗口藏起来，统计仍在继续。打开后可以填「秒后隐藏」，例如 30 秒：脱战后再显示一会儿，方便看完上一场。悬浮窗也有同样的设置。",
+                    "Hide out of combat only hides the window; the meter keeps counting. Once it is on, set seconds before hiding, for example 30, to keep the last pull readable for a while. Overlays have the same setting."));
             Image("control-meter", text.Get("战斗统计页", "The Combat Meter page"));
         });
         DrawCard("help-meter-templates", text.Get("榜单模板与显示的数据", "Templates and columns"), () => Bullets(

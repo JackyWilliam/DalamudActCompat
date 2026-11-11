@@ -229,6 +229,7 @@ try
         Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
     if (args.Contains("--meter-display-scope-only", StringComparer.Ordinal)) return 0;
     AiAssistantSmokeTests.Run(testRoot);
+    CombatAutoHideSmokeTests.Run();
     EnglishLocalizationSmokeTests.Run();
     UiLanguageSmokeTests.Run();
     HelpWindowSmokeTests.Run();

@@ -67,6 +67,9 @@ public sealed class MeterWindowProfile
 
     public bool AutoHideOutOfCombat { get; set; }
 
+    // Seconds the window stays up after combat before 脱战隐藏 hides it; 0 hides at once.
+    public int AutoHideDelaySeconds { get; set; }
+
     public bool ShowHeader { get; set; } = true;
 
     public MeterCollapseDirection CollapseDirection { get; set; } = MeterCollapseDirection.Upward;
