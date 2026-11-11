@@ -46,3 +46,47 @@ Unscrambler.XIV 还没有 7.58 配置。两地区都不会被当作「已验证�
   银山雀儿归一化为 7.58。
 - 以上为离线验证。实际 7.58 客户端中的初始化、战斗统计、日志上传与扩展事件需在游戏内确认；
   PR #300 合并后需复核数值是否有变。
+
+# 1.0.0.5 补齐：解析器 3.0.3.5 与 Unscrambler 7.58.0
+
+1.0.0.4 发布（12:16Z）之后，上游补出了 7.58 剩下的两项依赖。本节只记录这两项，其它依赖与 1.0.0.4 相同
+（三道依赖门禁本地复核：解析器、随包扩展、Cactbot 0.37.5 均为最新）。
+
+| 环节 | 1.0.0.4 | 1.0.0.5 | 固定依据 |
+| --- | --- | --- | --- |
+| FFXIV ACT Plugin | 3.0.3.4 | 3.0.3.5 | [官方发布](https://github.com/ravahn/FFXIV_ACT_Plugin/releases/tag/3.0.3.5)（2026-11-11 00:58Z，附件 SHA-256 `9e1487831e9b9d89a4452cb75cec4cbef578ab43b2246733eb1ecce03cb28011`）；`tools/sync-parser-dependencies.ps1` 同步，Logfile 身份仍重写为 IINACT 2.10.3.12 |
+| Unscrambler.XIV | 7.57.1（7.58 走兜底） | 7.58.0 | [NuGet](https://www.nuget.org/packages/Unscrambler.XIV/7.58.0)（2026-11-10 15:26Z，packageHash 与本地一致，登记源码 perchbirdd/unscrambler `c5826c2`）；锁文件 contentHash `1Z1tQimX…OGig==` |
+
+## 解析器来源核对
+
+同步工具从 iinact.com updater 下载。把官方 GitHub 发布包放进临时目录、走同一套解包与补丁流程，
+得到的 15 个文件（主程序、SDK 与顶层副本）与仓库内文件逐字节一致。Resource 从 8,670,208 增至
+8,714,240 字节（繁中地名），其余文件大小不变。
+
+## 解混淆：7.58 改为已验证配置
+
+Unscrambler 7.58.0 的 `Constants758`：GameVersion `2026.11.03.0000.0000`、密钥表 RVA `0x2322350`、
+34 × 4 = 136 字节、ObfuscationEnabledMode 157、InitZone `0xAB`、UnknownObfuscationInitOpcode `0x2F5`，
+19 项混淆操作码，工厂对应 `Unscrambler73`。
+
+- **国际服**：`CanUseBundledVersionConstants` 直接命中 7.58 官方配置，不再兜底、不再弹警告。
+- **国服**：版本号相同，但国服 7.58 客户端的密钥表在 `0x231F9A0`（1.0.0.4 离线扫描结果，同为 136 字节），
+  不能用国际服地址。`CanUseChineseRuntimeVersionConstants` 加入 7.58：使用官方 19 项操作码，密钥表从运行中的
+  客户端扫描，并要求大小等于 136 字节（7.57 的 83 项等其它大小会被拒绝）。
+- **国服 19 项逐项依据**：公开国服 7.58 操作码 [Yarukon/FFXIVNetworkOpcodes `725b4b0`](https://github.com/Yarukon/FFXIVNetworkOpcodes/tree/725b4b0/output/CN_2026.11.03)
+  （Unscrambler 代码生成器取国服操作码的同一来源）。其中 12 项取自 machina.txt，Examine / UpdateGearset(ModelEquip) /
+  UpdateParty 取自 opcodes.json，均与 Unscrambler 7.58 相同；InitZone 同为 `0xAB`。
+  UnknownEffect01/16、ActionEffect02/04 四项按生成器写死的名字（EventAction8/16、EventFinish64/128）对不上，
+  但该数据集这四个名字整体错开一位：按 EventAction16/32、EventFinish128/255 读取时，国服 7.57 数据与已验证的
+  Unscrambler 7.57 四项完全相同；同一映射下国服 7.58 为 `0x351`、`0x385`、`0x326`、`0x222`，与 Unscrambler 7.58 一致。
+- 1.0.0.4 兜底填入的 12 项 Machina 值与官方 7.58 完全相同；当时留空的 7 项现在有了官方值。
+
+## 验证与边界
+
+- Package：`Patch758SmokeTests` 改为断言官方 7.58 常量、工厂类型、国际服走打包配置、国服走运行时密钥表
+  （拒绝 132/140/332/356 字节）、国服运行时常量不借用国际服地址与查表、Machina 国服/国际服 12 项与官方一致、
+  翻译客户端仍选国际服配置，并用两地区解码器完整还原合成 ActorCast / ActionEffect 包；
+  依赖版本断言 Unscrambler 7.58.0.0、FFXIV_ACT_Plugin 3.0.3.5，FFLogs 头为
+  `This is IINACT 2.10.3.12 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.5`。
+- 以上为离线验证。7.58 游戏内的初始化（日志应出现 bundled / runtime-discovered Chinese key table，而不是
+  No ranking-safe）、战斗统计与 FF Logs 上传仍需实测。韩服不在 DACT 发行范围内，未作结论。
