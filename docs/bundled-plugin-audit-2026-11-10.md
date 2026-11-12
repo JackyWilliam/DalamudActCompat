@@ -90,3 +90,32 @@ Unscrambler 7.58.0 的 `Constants758`：GameVersion `2026.11.03.0000.0000`、密
   `This is IINACT 2.10.3.12 (API 1.6.0) based on FFXIV_ACT_Plugin 3.0.3.5`。
 - 以上为离线验证。7.58 游戏内的初始化（日志应出现 bundled / runtime-discovered Chinese key table，而不是
   No ranking-safe）、战斗统计与 FF Logs 上传仍需实测。韩服不在 DACT 发行范围内，未作结论。
+
+# 1.0.0.7 补齐：抹茶 / 银山雀儿的 FateInfo 与 WorldVisitQueue
+
+2026-11-11 复查（对照 1.0.0.6）：解析器、IINACT、OverlayPlugin、Unscrambler、Machina、FFXIVOpcodes、Cactbot、
+随包扩展均无新版本，三道依赖门禁 current。唯一变化是抹茶上游补出了 7.58 的两个编号。
+
+| 环节 | 1.0.0.6 | 1.0.0.7 | 固定依据 |
+| --- | --- | --- | --- |
+| 抹茶 FateInfo | 不映射 | `0x0374` | [thewakingsands/matcha `fb92f67`](https://github.com/thewakingsands/matcha/commit/fb92f67)（2026-11-12 02:31Z，CI 生成的 7.58 表，国服/国际服同值） |
+| 抹茶 WorldVisitQueue | 不映射 | `0x0356` | 同上 |
+| 银山雀儿 FateInfo | 占位 `F009` | `0x0374` | 与抹茶 FateInfo 为同一个包（7.57 时两者同为 `0x0259`） |
+
+## 来源核对
+
+- 抹茶上游表共 30 项，其中 26 项与 DACT 1.0.0.4 起的 7.58 重写表逐项相同；UpdateInventorySlot、Logout 两项
+  DACT 基线 `d4fffc6` 的枚举里没有，不涉及。
+- 抹茶 CI 从 [zhyupe/ffxiv-opcode-worker `91303cd`](https://github.com/zhyupe/ffxiv-opcode-worker/commit/91303cd) 取国服表。该提交的
+  `reports/7.58.json` 标注这两项来源为 opcodediff（由 7.57→7.58 二进制差异一对一映射），并在国服
+  `2026.11.03.0000.0000` 客户端（exe SHA-256 `83982c85…`）上核对了 201 个具名 Zone 操作码。它的 7.57 表
+  FateInfo `0x0259`、WorldVisitQueue `0x007C` 与 DACT 7.57 国服所用值（抹茶 `0a5fb86`）相同。
+- FFXIVOpcodes master 的 7.58 表仍不含这两项；`0x0374`、`0x0356` 在其国服/国际服 7.58 表和 DACT 的
+  Machina / OverlayPlugin 7.58 表中都没有被其他包占用。
+
+## 验证与边界
+
+- Host：抹茶两地区 7.58 表 28 项逐项断言；恢复 1.0.0.4 前的路由检查——真实抹茶 DLL 把 `0x0374` 解析为 FATE
+  （开始时间、时长）、把 `0x0356` 交给排队处理器（位置、等待时间）；7.57 旧编号、`F009` 占位与反方向包不识别。
+  银山雀儿 opcodes.json 两地区 FateInfo 归一化为 `0x0374`。
+- 两个编号暂无第二份独立公开表，FATE 提醒与跨服排队需在游戏内确认。

@@ -263,9 +263,9 @@ public static partial class HostPluginBridge
             // CN and Global share the 7.58 build (2026.11.03); values follow FFXIVOpcodes
             // PR #300 (a0ffb40) and match Machina 7.58 for ActorControlSelf.
             ["InitZone"] = ("0x00AB", "0x00AB"),
-            // 7.58 has no published FateInfo value in either region, so both keep
-            // SilverDasher's own 0xF009 placeholder instead of parsing an unrelated packet.
-            ["FateInfo"] = ("0xF009", "0xF009"),
+            // FateInfo is absent from FFXIVOpcodes; it follows the Host's Matcha 7.58 table
+            // (Matcha upstream fb92f67), the same packet both plugins already shared on 7.57.
+            ["FateInfo"] = ("0x0374", "0x0374"),
             ["ActorControlSelf"] = ("0x00A9", "0x00A9"),
         };
         var found = new HashSet<string>(StringComparer.Ordinal);
