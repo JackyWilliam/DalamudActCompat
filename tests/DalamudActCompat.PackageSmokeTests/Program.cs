@@ -135,6 +135,11 @@ try
         FilePickerNativeSmokeTests.Run();
         return 0;
     }
+    if (args.Contains("--soft-wrap-native-only", StringComparer.Ordinal))
+    {
+        SoftWrapTextBoxNativeSmokeTests.Run();
+        return 0;
+    }
     if (args.Contains("--ban-recovery-only", StringComparer.Ordinal))
     {
         await CloudBanRecoverySmokeTests.RunAsync(testRoot);
@@ -233,6 +238,7 @@ try
     EnglishLocalizationSmokeTests.Run();
     UiLanguageSmokeTests.Run();
     HelpWindowSmokeTests.Run();
+    SoftWrapTextSmokeTests.Run();
     if (args.Contains("--localization-only", StringComparer.Ordinal)) return 0;
     if (args.Contains("--liquid-glass-only", StringComparer.Ordinal))
     {

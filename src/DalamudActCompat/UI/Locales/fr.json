@@ -2084,5 +2084,15 @@
   "After {0} s": "Après {0} s",
   "After {0} min": "Après {0} min",
   "When to hide after combat. With After 30 s and the like, the window stays up for a while so the last pull can be read; re-entering combat keeps it shown.": "Quand masquer la fenêtre après le combat. Avec « Après 30 s » et similaires, elle reste affichée un moment pour relire le dernier pull ; reprendre le combat la garde affichée.",
-  "With Hide out of combat on, the choice next to it sets how long after combat the window hides, for example After 30 s, so the last pull can still be read. Hide timing on the Overlays page works the same way.": "Avec « Masquer hors combat » activé, le choix à côté règle le délai de masquage après le combat, par exemple « Après 30 s », pour pouvoir relire le dernier pull. « Moment » sur la page des overlays fonctionne de la même façon."
+  "With Hide out of combat on, the choice next to it sets how long after combat the window hides, for example After 30 s, so the last pull can still be read. Hide timing on the Overlays page works the same way.": "Avec « Masquer hors combat » activé, le choix à côté règle le délai de masquage après le combat, par exemple « Après 30 s », pour pouvoir relire le dernier pull. « Moment » sur la page des overlays fonctionne de la même façon.",
+  "Settings page": "Page de configuration",
+  "DPS meter (Xephero)": "Compteur DPS (Xephero)",
+  "DPS meter (Rdmty)": "Compteur DPS (Rdmty)",
+  "Field exploration tracker": "Suivi des zones d'exploration",
+  "Fishing assistant": "Assistant de pêche",
+  "Job gauges": "Jauges de job",
+  "Mistakes and deaths": "Erreurs et morts",
+  "Pull counter": "Compteur de tentatives",
+  "Hunt radar": "Radar de chasse",
+  "Test page": "Page de test"
 }

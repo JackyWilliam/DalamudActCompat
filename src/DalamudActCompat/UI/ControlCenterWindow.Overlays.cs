@@ -261,20 +261,26 @@ public sealed partial class ControlCenterWindow
         ImGui.SameLine(0, 8 * s);
         if (DactUi.IconButton("##overlay-more", "more", text.Get("更多", "More"), DactTheme.Palette.Hover)) ImGui.OpenPopup("overlay-actions");
         var removed = false;
-        if (DactUi.BeginMenuPopup("overlay-actions"))
+        const float menuWidth = 220;
+        if (DactUi.BeginMenuPopup("overlay-actions", menuWidth * s + 8 * s))
         {
-            if (!cactbot && DactUi.MenuRow(text.Get("重命名", "Rename"), width: 220 * s))
+            if (!cactbot && DactUi.MenuRow(text.Get("重命名", "Rename"), width: menuWidth * s))
             {
                 overlayBeingRenamed = name; overlayRenameValue = OverlayDisplayName(name); overlayRenameFeedback = null;
                 ImGui.CloseCurrentPopup();
             }
-            if (DactUi.MenuRow(cactbot ? text.Get("移除并重置", "Remove and reset") : text.Get("删除悬浮窗", "Delete overlay"), danger: true, width: 220 * s))
+            if (DactUi.MenuRow(cactbot ? text.Get("移除并重置", "Remove and reset") : text.Get("删除悬浮窗", "Delete overlay"), danger: true, width: menuWidth * s))
             { deleteHtmlOverlay(name); SelectManagedOverlay(null); removed = true; ImGui.CloseCurrentPopup(); }
-            ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + 212 * s);
-            DactUi.Hint(cactbot ? text.Get(
+            // The note lines up with the row labels (10 px into a row) and wraps once, at the
+            // row's width less both insets; it used to sit on the popup's 4 px edge, and an extra
+            // ImGui wrap width cut the already-wrapped lines a second time (反馈, 2026-11-12).
+            ImGui.Indent(10 * s);
+            DactUi.Wrapped(cactbot ? text.Get(
                 "关闭并移除记录，清除窗口设置；保留本地模板。", "Close and remove this entry, clearing window settings while keeping the local template.")
-                : text.Get("关闭悬浮窗并删除它保存的网址、位置、大小与显示设置。", "Close the overlay and delete its saved URL, position, size, and display settings."));
-            ImGui.PopTextWrapPos();
+                : text.Get("关闭悬浮窗并删除它保存的网址、位置、大小与显示设置。", "Close the overlay and delete its saved URL, position, size, and display settings."),
+                DactUi.HintColor, DactFonts.Small, menuWidth * s - 20 * s);
+            ImGui.Unindent(10 * s);
+            ImGui.Dummy(new Vector2(0, 2 * s));
             ImGui.EndPopup();
         }
         ImGui.SetCursorScreenPos(rowStart);
@@ -511,7 +517,7 @@ public sealed partial class ControlCenterWindow
                     var previous = cactbot ? configuration.SelectedCactbotOverlay : configuration.SelectedOverlayTemplate;
                     selectedCreationTemplate = choices.FirstOrDefault(t => string.Equals(t.Name, previous, StringComparison.OrdinalIgnoreCase))?.Name ?? choices[0].Name;
                 }
-                var labels = choices.Select(t => cactbot ? FormatCactbotOverlayName(t.Name) : t.Name).ToArray();
+                var labels = choices.Select(t => cactbot ? CactbotChoiceLabel(t.Name) : t.Name).ToArray();
                 var index = Array.FindIndex(choices, t => t.Name == selectedCreationTemplate);
                 DactUi.BeginField(text.Get("模板", "Template"));
                 if (DactUi.Select("creation-template", labels, ref index)) selectedCreationTemplate = choices[index].Name;

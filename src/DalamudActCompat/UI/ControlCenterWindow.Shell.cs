@@ -22,6 +22,7 @@ public sealed partial class ControlCenterWindow
         DactUi.BeginFrameDialogs();
         DactUi.HostMin = ImGui.GetWindowPos();
         DactUi.HostMax = ImGui.GetWindowPos() + ImGui.GetWindowSize();
+        ShellBounds = (DactUi.HostMin, DactUi.HostMax);
         var s = DactUi.S;
         var line = Math.Max(1, s);
         var windowMin = ImGui.GetWindowPos();
@@ -46,7 +47,7 @@ public sealed partial class ControlCenterWindow
         DrawDiscoveryToast(windowMin, windowSize);
         // Both open from the header, in this window's ID scope; the dropdown lies above the page.
         DrawHeaderSearchDropdown(cloudSnapshot);
-        DrawFeedbackDialog(cloudSnapshot);
+        DrawMyFeedbackDialog();
         DactUi.DrawScrim();
     }
 

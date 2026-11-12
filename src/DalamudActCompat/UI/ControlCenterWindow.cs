@@ -2671,6 +2671,7 @@ public sealed partial class ControlCenterWindow : Window
         }
     }
 
+    // Every Cactbot preset in the UI language. Chinese names follow cactbot's own zh-CN README.
     private string FormatCactbotOverlayName(string name)
         => name switch
         {
@@ -2678,12 +2679,33 @@ public sealed partial class ControlCenterWindow : Window
                 text.Get("文字提醒", "Raidboss alerts"),
             SelfHostedActRuntime.CactbotTimelineOverlayName =>
                 text.Get("时间轴", "Raidboss timeline"),
-            SelfHostedActRuntime.CactbotOverlayName =>
+            SelfHostedActRuntime.CactbotOverlayName or SelfHostedActRuntime.CactbotCombinedTemplateName =>
                 text.Get("文字提醒 + 时间轴（旧版组合）", "Alerts + timeline (legacy combined)"),
-            _ => name.StartsWith("Cactbot ", StringComparison.OrdinalIgnoreCase)
-                ? name["Cactbot ".Length..]
-                : name,
+            "Cactbot Configuration" => text.Get("设置页", "Settings page"),
+            "Cactbot DPS Xephero" => text.Get("DPS 统计（Xephero）", "DPS meter (Xephero)"),
+            "Cactbot DPS Rdmty" => text.Get("DPS 统计（Rdmty）", "DPS meter (Rdmty)"),
+            "Cactbot Eureka" => text.Get("特殊场景探索", "Field exploration tracker"),
+            "Cactbot Fisher" => text.Get("钓鱼助手", "Fishing assistant"),
+            "Cactbot Jobs" => text.Get("职业量谱", "Job gauges"),
+            "Cactbot OopsyRaidsy" => text.Get("错误与死亡报告", "Mistakes and deaths"),
+            "Cactbot PullCounter" => text.Get("重试计数", "Pull counter"),
+            SelfHostedActRuntime.CactbotRadarOverlayName => text.Get("狩猎雷达", "Hunt radar"),
+            "Cactbot Test" => text.Get("测试页", "Test page"),
+            _ => CactbotPresetName(name),
         };
+
+    // Cactbot's own preset name, which its docs and other players use.
+    private static string CactbotPresetName(string name)
+        => name.StartsWith("Cactbot ", StringComparison.OrdinalIgnoreCase) ? name["Cactbot ".Length..] : name;
+
+    // 添加悬浮窗 lists Cactbot's presets as 「本地名 / preset name」 (user request, 2026-11-12), so
+    // a player who knows a preset by cactbot's English name can still find it.
+    private string CactbotChoiceLabel(string name)
+    {
+        var local = FormatCactbotOverlayName(name);
+        var preset = CactbotPresetName(name);
+        return string.Equals(local, preset, StringComparison.OrdinalIgnoreCase) ? local : $"{local} / {preset}";
+    }
 
     private static int GetCactbotOverlayOrder(string name)
         => name switch
