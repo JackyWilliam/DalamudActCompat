@@ -168,8 +168,10 @@ public static partial class LegacyAssemblyRewriter
         // (FFXIVOpcodes PR #300 a0ffb40: all 182 shared CN/Global entries match). Values use
         // FFXIVOpcodes' names AirshipTimers, SubmarineTimers, CFNotify and MiniCactpotInit
         // for Matcha's legacy names. CEDirector also matches OverlayPlugin 0.19.112 (622).
-        // FateInfo and WorldVisitQueue have no published 7.58 value; a stale 7.57 entry
-        // would parse unrelated packets, so both stay unmapped until one is published.
+        // FFXIVOpcodes has no FateInfo/WorldVisitQueue; both come from Matcha upstream
+        // fb92f67 (zhyupe/ffxiv-opcode-worker 91303cd, opcodediff mapped from the 7.57
+        // 0x0259/0x007C pair and checked against the CN 2026.11.03 binary), the same
+        // source DACT used for CN 7.57. Its other 26 entries equal this table.
         var patch758 = new Dictionary<ushort, string>
         {
             [0x02DF] = "ActorControl",
@@ -183,6 +185,7 @@ public static partial class LegacyAssemblyRewriter
             [0x020B] = "EventPlay",
             [0x039F] = "EventStart",
             [0x0289] = "Examine",
+            [0x0374] = "FateInfo",
             [0x00AB] = "InitZone",
             [0x033D] = "InventoryTransaction",
             [0x03DA] = "ItemInfo",
@@ -194,6 +197,7 @@ public static partial class LegacyAssemblyRewriter
             [0x01AE] = "PlayerSetup",
             [0x02FC] = "PlayerSpawn",
             [0x00F2] = "SubmarineStatusList",
+            [0x0356] = "WorldVisitQueue",
             [0x0108] = "EventPlay4",
             [0x01DE] = "SystemLogMessage",
             [0x0127] = "FishCaught",
