@@ -8,6 +8,10 @@ namespace DalamudActCompat.Host;
 
 public static partial class LegacyAssemblyRewriter
 {
+    // The newest upstream build whose firewall, unload and start code the patches below were
+    // written against and verified with (docs/simulant-compatibility.md).
+    internal static readonly Version LastAdaptedSimulantVersion = new(0, 0, 4, 2);
+
     public static Assembly LoadSimulant(string assemblyPath, AssemblyLoadContext loadContext)
     {
         using var definition = AssemblyDefinition.ReadAssembly(assemblyPath);
@@ -15,6 +19,15 @@ public static partial class LegacyAssemblyRewriter
         if (definition.Name.Name != "Simulant")
         {
             throw new InvalidDataException("Expected the upstream Simulant assembly.");
+        }
+
+        // These patches edit upstream IL by its shape. v0.1.0.0 rebuilt the firewall around hook
+        // records, moved its unsubscribe into a cleanup lambda and requires PostNamazu 1.3.6.7,
+        // so it stopped at the first lookup below with "Sequence contains no matching element".
+        // Say what is wrong and what works instead; nothing of a newer build is loaded.
+        if (definition.Name.Version > LastAdaptedSimulantVersion)
+        {
+            throw new NotSupportedException(GetUnsupportedSimulantMessage(definition.Name.Version));
         }
 
         // Preserve the upstream simulator and embedded CSVs, converting only legacy form
@@ -144,4 +157,9 @@ public static partial class LegacyAssemblyRewriter
         output.Position = 0;
         return loadContext.LoadFromStream(output);
     }
+
+    internal static string GetUnsupportedSimulantMessage(Version version)
+        => $"DACT 目前只适配到仿生石 v{LastAdaptedSimulantVersion}，导入的是 v{version}。" +
+           "新版改写了防火墙和卸载流程，并要求鲶鱼精邮差 1.3.6.7 以上，DACT 尚未适配，所以没有加载它。" +
+           $"请先删除这个扩展，重新导入 v{LastAdaptedSimulantVersion} 的 Simulant.dll。";
 }
