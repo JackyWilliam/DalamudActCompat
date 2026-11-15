@@ -321,6 +321,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
         // Initialize ACT's zone before replaying combat, but publish the external zone
         // event afterward so plugins still observe the original queued event order.
         HostPluginBridge.PublishTriggernometryZoneChange(territoryId, zoneName);
+        SimulantCompatibility.NotifyZoneChanged(territoryId, zoneName);
     }
 
     public void SetCombatState(bool inCombat)

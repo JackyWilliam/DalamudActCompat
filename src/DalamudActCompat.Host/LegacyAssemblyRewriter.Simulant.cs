@@ -9,10 +9,25 @@ namespace DalamudActCompat.Host;
 public static partial class LegacyAssemblyRewriter
 {
     // The newest upstream build whose firewall, unload and start code the patches below were
-    // written against and verified with (docs/simulant-compatibility.md).
-    internal static readonly Version LastAdaptedSimulantVersion = new(0, 0, 4, 2);
+    // written against (docs/simulant-compatibility.md).
+    internal static readonly Version LastAdaptedSimulantVersion = new(0, 1, 0, 0);
+
+    // v0.1.0.0 rebuilt the firewall around per-hook records, subscribes to process and zone
+    // changes, updates itself and makes native calls through PostNamazu's call scheduler.
+    // Builds before it keep the patches they were verified with.
+    private static readonly Version FirstHookRecordSimulantVersion = new(0, 1, 0, 0);
 
     public static Assembly LoadSimulant(string assemblyPath, AssemblyLoadContext loadContext)
+    {
+        using var output = RewriteSimulant(assemblyPath);
+        return loadContext.LoadFromStream(output);
+    }
+
+    /// <summary>
+    /// Applies the Simulant patches and returns the rewritten assembly without loading it, so a
+    /// new upstream build can be checked against them before any of its code runs.
+    /// </summary>
+    internal static MemoryStream RewriteSimulant(string assemblyPath)
     {
         using var definition = AssemblyDefinition.ReadAssembly(assemblyPath);
         var module = definition.MainModule;
@@ -21,10 +36,9 @@ public static partial class LegacyAssemblyRewriter
             throw new InvalidDataException("Expected the upstream Simulant assembly.");
         }
 
-        // These patches edit upstream IL by its shape. v0.1.0.0 rebuilt the firewall around hook
-        // records, moved its unsubscribe into a cleanup lambda and requires PostNamazu 1.3.6.7,
-        // so it stopped at the first lookup below with "Sequence contains no matching element".
-        // Say what is wrong and what works instead; nothing of a newer build is loaded.
+        // These patches edit upstream IL by its shape, so a build newer than the one they were
+        // written for fails at an arbitrary lookup with "Sequence contains no matching
+        // element". Say what is wrong and what works instead; nothing of it is loaded.
         if (definition.Name.Version > LastAdaptedSimulantVersion)
         {
             throw new NotSupportedException(GetUnsupportedSimulantMessage(definition.Name.Version));
@@ -37,27 +51,43 @@ public static partial class LegacyAssemblyRewriter
                    ?? throw new TypeLoadException("Simulant.Core.PluginHost");
         var interop = module.GetType("Simulant.ACT.XivPluginInterop")
                       ?? throw new TypeLoadException("Simulant.ACT.XivPluginInterop");
+        var hookRecords = definition.Name.Version >= FirstHookRecordSimulantVersion;
         var attach = host.Methods.Single(method => method.Name == "Attach");
         var pluginField = interop.Fields.Single(field => field.Name == "plugin");
         attach.Body = new Mono.Cecil.Cil.MethodBody(attach);
         var il = attach.Body.GetILProcessor();
-        // ACT's status-label polling never terminates against DACT's facade. The upstream
-        // process-change callback is empty; bind the existing identity synchronously instead.
+        // Upstream waits for ACT's status label to read "STARTED" before it binds anything.
+        // That label never changes against DACT's facade, so bind the identity directly.
         il.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(
             nameof(SimulantCompatibility.GetFfxivPlugin))!));
         il.Emit(OpCodes.Castclass, pluginField.FieldType);
         il.Emit(OpCodes.Stsfld, pluginField);
+        if (hookRecords)
+        {
+            // From v0.1.0.0 the same wait also subscribes to zone changes, which is how the
+            // simulator learns that the addresses of its spawned entities and simulated party
+            // went stale. The facade raises no such event; DACT delivers its own zone changes
+            // to the upstream handler instead. Process changes need no bridge: a Host never
+            // outlives the game process it was started for.
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(
+                nameof(SimulantCompatibility.ObserveZoneChanges))!));
+        }
         il.Emit(OpCodes.Ret);
 
-        // Attach no longer subscribes to the facade's process event. Drop the matching
-        // unsubscribe only, retaining upstream firewall restoration and the rest of Dispose.
-        var unsubscribe = host.Methods.Single(method => method.Name == "Dispose")
-            .Body.Instructions.Single(instruction => instruction.Operand is MethodReference called &&
-                called.Name == "remove_ProcessChanged");
-        unsubscribe.OpCode = OpCodes.Pop;
-        unsubscribe.Operand = null;
-        host.Methods.Single(method => method.Name == "Dispose").Body.GetILProcessor()
-            .InsertAfter(unsubscribe, Instruction.Create(OpCodes.Pop));
+        if (!hookRecords)
+        {
+            // Attach no longer subscribes to the facade's process event. Drop the matching
+            // unsubscribe only, retaining upstream firewall restoration and the rest of Dispose.
+            // (v0.1.0.0 unsubscribes only what it recorded as subscribed, which is nothing.)
+            var unsubscribe = host.Methods.Single(method => method.Name == "Dispose")
+                .Body.Instructions.Single(instruction => instruction.Operand is MethodReference called &&
+                    called.Name == "remove_ProcessChanged");
+            unsubscribe.OpCode = OpCodes.Pop;
+            unsubscribe.Operand = null;
+            host.Methods.Single(method => method.Name == "Dispose").Body.GetILProcessor()
+                .InsertAfter(unsubscribe, Instruction.Create(OpCodes.Pop));
+        }
 
         var accessCheck = module.ImportReference(typeof(SimulantCompatibility).GetMethod(
             nameof(SimulantCompatibility.EnsureNativeAccess))!);
@@ -77,41 +107,19 @@ public static partial class LegacyAssemblyRewriter
             scan.Body.GetILProcessor().InsertAfter(instruction, Instruction.Create(OpCodes.Ret));
         }
 
-        // Keep the original entry backup intact for Disable, but relocate an existing
-        // Dalamud/plugin jump when upstream copies those bytes into its send-hook cave.
         var firewall = module.GetType("Simulant.Core.Firewall.FirewallService");
-        var enableFirewall = firewall.Methods.Single(method => method.Name == "Enable");
-        var sendHook = firewall.Methods.Single(method => method.Name == "SendHookEnable");
-        var copiedEntry = sendHook.Body.Instructions.Single(instruction =>
-            instruction.OpCode == OpCodes.Ldfld && instruction.Operand is FieldReference field &&
-            field.Name == "_sendHookOriginal" && instruction.Next.Operand is MethodReference call && call.Name == "AddRange");
         var sendAddress = module.GetType("Simulant.Game.AddressStore").Properties.Single(p => p.Name == "OnSendPacketFuncPtr").GetMethod;
-        var getAddress = Instruction.Create(OpCodes.Call, sendAddress);
-        var prepareEntry = Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility)
-            .GetMethod(nameof(SimulantCompatibility.PrepareSendHookInstructions))!));
-        sendHook.Body.GetILProcessor().InsertAfter(copiedEntry, getAddress);
-        sendHook.Body.GetILProcessor().InsertAfter(getAddress, prepareEntry);
-
-        var allocation = sendHook.Body.Instructions.Single(instruction => instruction.Operand is MethodReference called && called.Name == "AllocateMemory");
-        allocation.OpCode = OpCodes.Call;
-        allocation.Operand = module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.AllocateSendHookMemory))!);
-
-        // The upstream 15-byte patch overlaps a Dalamud trampoline returning at +10.
-        // Keep its saved backup and cave logic, but write only a five-byte near jump.
-        var entryWrite = sendHook.Body.Instructions.Last(instruction => instruction.Operand is MethodReference called && called.Name == "WriteBytes");
-        var patchArray = entryWrite.Previous.Previous.Previous;
-        if (patchArray.Operand is not MethodReference { Name: "ToArray" })
-            throw new InvalidDataException("Unexpected Simulant send entry patch layout.");
-        var entryAddress = Instruction.Create(OpCodes.Call, sendAddress);
-        sendHook.Body.GetILProcessor().InsertAfter(patchArray, entryAddress);
-        sendHook.Body.GetILProcessor().InsertAfter(entryAddress, Instruction.Create(OpCodes.Call,
-            module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.PrepareSendEntryPatch))!)));
-
-        enableFirewall.Body = new Mono.Cecil.Cil.MethodBody(enableFirewall);
-        var enableIl = enableFirewall.Body.GetILProcessor();
-        enableIl.Emit(OpCodes.Ldarg_0);
-        enableIl.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.EnableFirewall))!));
-        enableIl.Emit(OpCodes.Ret);
+        if (hookRecords)
+        {
+            AcceptPostNamazuSnapshot(namazuInit);
+            PatchHookRecordFirewall(module, firewall, sendAddress);
+            DisableSimulantUpdater(module);
+            RedirectSimulantConfiguration(module, host);
+        }
+        else
+        {
+            PatchLegacyFirewall(module, firewall, sendAddress);
+        }
 
         // A selected preset alone used to start a session even back in the real inn.
         // Check both the completed simulated-zone state and the live territory first.
@@ -152,14 +160,148 @@ public static partial class LegacyAssemblyRewriter
             entityPointers.Body.GetILProcessor().InsertAfter(instruction, Instruction.Create(OpCodes.Ret));
         }
 
-        using var output = new MemoryStream();
+        var output = new MemoryStream();
         definition.Write(output);
         output.Position = 0;
-        return loadContext.LoadFromStream(output);
+        return output;
+    }
+
+    // Up to v0.0.4.2: the firewall keeps its state in fields of the service itself.
+    private static void PatchLegacyFirewall(ModuleDefinition module, TypeDefinition firewall, MethodDefinition sendAddress)
+    {
+        // Keep the original entry backup intact for Disable, but relocate an existing
+        // Dalamud/plugin jump when upstream copies those bytes into its send-hook cave.
+        var enableFirewall = firewall.Methods.Single(method => method.Name == "Enable");
+        var sendHook = firewall.Methods.Single(method => method.Name == "SendHookEnable");
+        var copiedEntry = sendHook.Body.Instructions.Single(instruction =>
+            instruction.OpCode == OpCodes.Ldfld && instruction.Operand is FieldReference field &&
+            field.Name == "_sendHookOriginal" && instruction.Next.Operand is MethodReference call && call.Name == "AddRange");
+        var getAddress = Instruction.Create(OpCodes.Call, sendAddress);
+        var prepareEntry = Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility)
+            .GetMethod(nameof(SimulantCompatibility.PrepareSendHookInstructions))!));
+        sendHook.Body.GetILProcessor().InsertAfter(copiedEntry, getAddress);
+        sendHook.Body.GetILProcessor().InsertAfter(getAddress, prepareEntry);
+
+        var allocation = sendHook.Body.Instructions.Single(instruction => instruction.Operand is MethodReference called && called.Name == "AllocateMemory");
+        allocation.OpCode = OpCodes.Call;
+        allocation.Operand = module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.AllocateSendHookMemory))!);
+
+        // The upstream 15-byte patch overlaps a Dalamud trampoline returning at +10.
+        // Keep its saved backup and cave logic, but write only a five-byte near jump.
+        var entryWrite = sendHook.Body.Instructions.Last(instruction => instruction.Operand is MethodReference called && called.Name == "WriteBytes");
+        var patchArray = entryWrite.Previous.Previous.Previous;
+        if (patchArray.Operand is not MethodReference { Name: "ToArray" })
+            throw new InvalidDataException("Unexpected Simulant send entry patch layout.");
+        var entryAddress = Instruction.Create(OpCodes.Call, sendAddress);
+        sendHook.Body.GetILProcessor().InsertAfter(patchArray, entryAddress);
+        sendHook.Body.GetILProcessor().InsertAfter(entryAddress, Instruction.Create(OpCodes.Call,
+            module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.PrepareSendEntryPatch))!)));
+
+        enableFirewall.Body = new Mono.Cecil.Cil.MethodBody(enableFirewall);
+        var enableIl = enableFirewall.Body.GetILProcessor();
+        enableIl.Emit(OpCodes.Ldarg_0);
+        enableIl.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.EnableFirewall))!));
+        enableIl.Emit(OpCodes.Ret);
+    }
+
+    // From v0.1.0.0: each hook is a HookState record and SendHookEnableCore builds the cave.
+    // Upstream now rolls a failed Enable back itself, so only the three places that touch the
+    // send entry are adjusted; they do the same as the legacy patches above. Upstream still
+    // copies the first 15 bytes into its cave and overwrites all 15 at the entry, which breaks
+    // when Dalamud or another plugin already hooked that function.
+    private static void PatchHookRecordFirewall(ModuleDefinition module, TypeDefinition firewall, MethodDefinition sendAddress)
+    {
+        var sendHook = firewall.Methods.Single(method => method.Name == "SendHookEnableCore");
+        var sendIl = sendHook.Body.GetILProcessor();
+        // cave.AddRange(state.Original): relocate a jump that is already at the entry.
+        var copiedEntry = sendHook.Body.Instructions.Single(instruction =>
+            instruction.OpCode == OpCodes.Ldfld && instruction.Operand is FieldReference { Name: "Original" } &&
+            instruction.Next.Operand is MethodReference { Name: "AddRange" });
+        var getAddress = Instruction.Create(OpCodes.Call, sendAddress);
+        sendIl.InsertAfter(copiedEntry, getAddress);
+        sendIl.InsertAfter(getAddress, Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility)
+            .GetMethod(nameof(SimulantCompatibility.PrepareSendHookInstructions))!)));
+
+        // state.Memory.AllocateMemory(0x100): the cave has to be within reach of a near jump.
+        var allocation = sendHook.Body.Instructions.Single(instruction => instruction.Operand is MethodReference { Name: "AllocateMemory" });
+        allocation.OpCode = OpCodes.Call;
+        allocation.Operand = module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.AllocateSendHookMemory))!);
+
+        // WriteExact(state, target, patch.ToArray()): five bytes at the entry instead of 15.
+        // WriteExact compares the count written with the array it was given, so it agrees.
+        var entryWrite = sendHook.Body.Instructions.Last(instruction => instruction.Operand is MethodReference { Name: "WriteExact" });
+        var patchArray = entryWrite.Previous;
+        if (patchArray.Operand is not MethodReference { Name: "ToArray" })
+            throw new InvalidDataException("Unexpected Simulant send entry patch layout.");
+        var entryAddress = Instruction.Create(OpCodes.Call, sendAddress);
+        sendIl.InsertAfter(patchArray, entryAddress);
+        sendIl.InsertAfter(entryAddress, Instruction.Create(OpCodes.Call,
+            module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.PrepareSendEntryPatch))!)));
+
+        // Enable installs the receive hook first. Refuse an entry the relocation cannot
+        // handle before anything is written, rather than rely on the rollback afterwards.
+        var enable = firewall.Methods.Single(method => method.Name == "Enable" && method.Parameters.Count == 0);
+        enable.Body.GetILProcessor().InsertBefore(enable.Body.Instructions[0], Instruction.Create(OpCodes.Call,
+            module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.ValidateSendHookEntry))!)));
+    }
+
+    // Upstream requires PostNamazu 1.3.6.7, a version number no official release carries yet.
+    // DACT bundles a build of upstream master that has the call scheduler this is really
+    // about and still declares 1.3.6.6 (tools/build-postnamazu-snapshot.ps1). Accept that
+    // number; a PostNamazu without the scheduler is still refused right after, by upstream's
+    // own lookup of the CallScheduler field.
+    private static void AcceptPostNamazuSnapshot(MethodDefinition namazuInit)
+    {
+        var minimum = namazuInit.Body.Instructions.Single(instruction =>
+            instruction.OpCode == OpCodes.Newobj &&
+            instruction.Operand is MethodReference { DeclaringType.FullName: "System.Version", Parameters.Count: 4 });
+        var revision = minimum.Previous;
+        if (revision.OpCode != OpCodes.Ldc_I4_7 ||
+            revision.Previous.OpCode != OpCodes.Ldc_I4_6 ||
+            revision.Previous.Previous.OpCode != OpCodes.Ldc_I4_3 ||
+            revision.Previous.Previous.Previous.OpCode != OpCodes.Ldc_I4_1)
+        {
+            throw new InvalidDataException("Unexpected Simulant PostNamazu version requirement.");
+        }
+
+        revision.OpCode = OpCodes.Ldc_I4_6;
+    }
+
+    // v0.1.0.0 checks GitHub on every start and, by default, replaces its own DLL in place.
+    // Under DACT that file is the copy the user imported and granted native memory access to,
+    // and a newer build is refused by the version check above until DACT is adapted to it.
+    // The check and the manual install both go through RunAsync; make it do nothing.
+    private static void DisableSimulantUpdater(ModuleDefinition module)
+    {
+        var run = module.GetType("Simulant.Core.PluginUpdater").Methods.Single(method =>
+            method.Name == "RunAsync" && method.Parameters.Count == 1 &&
+            method.ReturnType.FullName == "System.Threading.Tasks.Task");
+        var completed = new MethodReference("get_CompletedTask", run.ReturnType, run.ReturnType) { HasThis = false };
+        run.Body = new Mono.Cecil.Cil.MethodBody(run);
+        var il = run.Body.GetILProcessor();
+        il.Emit(OpCodes.Call, completed);
+        il.Emit(OpCodes.Ret);
+    }
+
+    // v0.1.0.0 keeps its settings under Application.StartupPath. In a Host that is the folder
+    // of one DACT version, so they would be lost with every DACT update.
+    private static void RedirectSimulantConfiguration(ModuleDefinition module, TypeDefinition host)
+    {
+        var startupPaths = host.Methods.Where(method => method.IsConstructor && method.HasBody)
+            .SelectMany(method => method.Body.Instructions)
+            .Where(instruction => instruction.Operand is MethodReference
+            {
+                Name: "get_StartupPath", DeclaringType.FullName: "System.Windows.Forms.Application",
+            })
+            .ToArray();
+        if (startupPaths.Length != 1)
+            throw new InvalidDataException("Unexpected Simulant configuration path layout.");
+        startupPaths[0].Operand = module.ImportReference(typeof(SimulantCompatibility).GetMethod(
+            nameof(SimulantCompatibility.GetConfigurationRoot))!);
     }
 
     internal static string GetUnsupportedSimulantMessage(Version version)
-        => $"DACT 目前只适配到仿生石 v{LastAdaptedSimulantVersion}，导入的是 v{version}。" +
-           "新版改写了防火墙和卸载流程，并要求鲶鱼精邮差 1.3.6.7 以上，DACT 尚未适配，所以没有加载它。" +
+        => $"DACT 目前适配到仿生石 v{LastAdaptedSimulantVersion}，导入的是 v{version}。" +
+           "更新的版本 DACT 尚未适配，所以没有加载它。" +
            $"请先删除这个扩展，重新导入 v{LastAdaptedSimulantVersion} 的 Simulant.dll。";
 }

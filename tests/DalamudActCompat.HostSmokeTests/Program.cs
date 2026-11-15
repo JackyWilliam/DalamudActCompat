@@ -30,6 +30,11 @@ if (args.Length is 2 or 3 && args[0] == "--foxtts-layout")
     return;
 }
 
+if (args.Length == 2 && args[0] == "--simulant-static")
+{
+    SimulantSmokeTests.RunStatic(args[1]);
+    return;
+}
 if (args.Length == 3 && args[0] == "--simulant")
 {
     SimulantSmokeTests.RunOriginal(args[1], args[2]);

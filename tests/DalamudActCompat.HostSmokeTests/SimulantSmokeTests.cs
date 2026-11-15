@@ -50,9 +50,9 @@ internal static class SimulantSmokeTests
         RunVersionGuard();
     }
 
-    // Upstream v0.1.0.0 (2026-11-14) no longer matches the rewriter and used to fail with
-    // "Sequence contains no matching element". A build newer than the adapted one is refused
-    // with the reason before anything of it is loaded; the adapted version is not affected.
+    // A build newer than the newest adapted one does not match the rewriter and used to fail
+    // with "Sequence contains no matching element" (v0.1.0.0 did, before it was adapted). It
+    // is refused with the reason before anything of it is loaded; adapted versions are not.
     private static void RunVersionGuard()
     {
         var root = Path.Combine(Path.GetTempPath(), "Dact-Simulant-Version-" + Guid.NewGuid().ToString("N"));
@@ -68,7 +68,7 @@ internal static class SimulantSmokeTests
                 return path;
             }
             var context = new System.Runtime.Loader.AssemblyLoadContext("simulant-version-guard", isCollectible: true);
-            foreach (var newer in new[] { new Version(0, 1, 0, 0), new Version(0, 0, 4, 3), new Version(1, 0, 0, 0) })
+            foreach (var newer in new[] { new Version(0, 1, 0, 1), new Version(0, 2, 0, 0), new Version(1, 0, 0, 0) })
             {
                 var newerPath = Write(newer);
                 try
@@ -79,7 +79,7 @@ internal static class SimulantSmokeTests
                 catch (NotSupportedException refused)
                 {
                     Assert(refused.Message.Contains($"v{newer}", StringComparison.Ordinal) &&
-                           refused.Message.Contains("v0.0.4.2", StringComparison.Ordinal) &&
+                           refused.Message.Contains("v0.1.0.0", StringComparison.Ordinal) &&
                            refused.Message.Contains("尚未适配", StringComparison.Ordinal),
                         "The refusal must name the imported version, the adapted version and the reason.");
                 }
@@ -87,7 +87,7 @@ internal static class SimulantSmokeTests
             Assert(!context.Assemblies.Any(), "A refused Simulant build must not be loaded.");
             // The adapted version and older ones still reach the rewriter itself: these empty
             // fixtures stop at its first type lookup, not at the version message.
-            foreach (var adapted in new[] { new Version(0, 0, 4, 2), new Version(0, 0, 4, 1) })
+            foreach (var adapted in new[] { new Version(0, 1, 0, 0), new Version(0, 0, 4, 2), new Version(0, 0, 4, 1) })
             {
                 try
                 {
@@ -106,6 +106,89 @@ internal static class SimulantSmokeTests
         {
             try { Directory.Delete(root, true); } catch (IOException) { }
         }
+    }
+
+    /// <summary>
+    /// Rewrites an upstream build and inspects the result without loading it, so a new build
+    /// can be checked on a machine that must not run it. Covers every adapted layout.
+    /// </summary>
+    public static void RunStatic(string dllPath)
+    {
+        using var rewritten = LegacyAssemblyRewriter.RewriteSimulant(dllPath);
+        using var definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(rewritten);
+        var module = definition.MainModule;
+        var version = definition.Name.Version;
+        var hookRecords = version >= new Version(0, 1, 0, 0);
+        var checks = 0;
+        Mono.Cecil.MethodDefinition Method(string type, string name)
+            => module.GetType(type).Methods.Single(method => method.Name == name);
+        int Calls(Mono.Cecil.MethodDefinition method, string name)
+            => method.Body.Instructions.Count(instruction =>
+                instruction.Operand is Mono.Cecil.MethodReference called && called.Name == name);
+        void Check(bool condition, string message)
+        {
+            Assert(condition, $"Simulant {version}: {message}");
+            checks++;
+        }
+
+        var attach = Method("Simulant.Core.PluginHost", "Attach");
+        Check(Calls(attach, nameof(SimulantCompatibility.GetFfxivPlugin)) == 1 &&
+              Calls(attach, nameof(SimulantCompatibility.ObserveZoneChanges)) == (hookRecords ? 1 : 0) &&
+              attach.Body.Instructions.Count == (hookRecords ? 6 : 4),
+            "Attach was not replaced by the direct binding.");
+        var init = Method("Simulant.ACT.NamazuInterop", "Init");
+        Check(init.Body.Instructions[0].Operand is Mono.Cecil.MethodReference { Name: nameof(SimulantCompatibility.EnsureNativeAccess) },
+            "NamazuInterop.Init does not start with the permission check.");
+        var scan = Method("Simulant.Game.SigAddressScanner", "Scan");
+        Check(scan.Body.Instructions.Where(instruction => instruction.OpCode == Mono.Cecil.Cil.OpCodes.Ret)
+                .All(instruction => instruction.Previous.Operand is Mono.Cecil.MethodReference { Name: nameof(SimulantCompatibility.ValidateSignatures) }),
+            "A signature scan can return without validation.");
+        var send = Method("Simulant.Core.Firewall.FirewallService", hookRecords ? "SendHookEnableCore" : "SendHookEnable");
+        Check(Calls(send, nameof(SimulantCompatibility.PrepareSendHookInstructions)) == 1 &&
+              Calls(send, nameof(SimulantCompatibility.AllocateSendHookMemory)) == 1 &&
+              Calls(send, nameof(SimulantCompatibility.PrepareSendEntryPatch)) == 1 &&
+              Calls(send, "AllocateMemory") == 0,
+            "The send hook is missing one of its three entry patches.");
+        var enable = module.GetType("Simulant.Core.Firewall.FirewallService").Methods
+            .Single(method => method.Name == "Enable" && method.Parameters.Count == 0);
+        var dispose = Method("Simulant.Core.PluginHost", "Dispose");
+        if (hookRecords)
+        {
+            Check(enable.Body.Instructions[0].Operand is Mono.Cecil.MethodReference { Name: nameof(SimulantCompatibility.ValidateSendHookEntry) } &&
+                  Calls(enable, "EnableWithRollback") == 1,
+                "Enable lost the entry check or the rollback upstream provides.");
+            var minimum = init.Body.Instructions.Single(instruction =>
+                instruction.OpCode == Mono.Cecil.Cil.OpCodes.Newobj &&
+                instruction.Operand is Mono.Cecil.MethodReference { DeclaringType.FullName: "System.Version" });
+            Check(minimum.Previous.OpCode == Mono.Cecil.Cil.OpCodes.Ldc_I4_6 &&
+                  minimum.Previous.Previous.OpCode == Mono.Cecil.Cil.OpCodes.Ldc_I4_6,
+                "The PostNamazu requirement still asks for 1.3.6.7.");
+            var updater = module.GetType("Simulant.Core.PluginUpdater").Methods.Single(method => method.Name == "RunAsync");
+            Check(updater.Body.Instructions.Count == 2 && Calls(updater, "get_CompletedTask") == 1,
+                "The self-updater can still run.");
+            var constructors = module.GetType("Simulant.Core.PluginHost").Methods
+                .Where(method => method.IsConstructor && method.HasBody).ToArray();
+            Check(constructors.Sum(method => Calls(method, "get_StartupPath")) == 0 &&
+                  constructors.Sum(method => Calls(method, nameof(SimulantCompatibility.GetConfigurationRoot))) == 1,
+                "The configuration file is still under the application folder.");
+            // Upstream unsubscribes only what Attach recorded, which is now nothing.
+            Check(Calls(dispose, "remove_ProcessChanged") == 0,
+                "Dispose unsubscribes an event Attach never subscribed.");
+        }
+        else
+        {
+            Check(Calls(enable, nameof(SimulantCompatibility.EnableFirewall)) == 1 && enable.Body.Instructions.Count == 3,
+                "Enable was not replaced by the ordered enable with rollback.");
+            Check(Calls(dispose, "remove_ProcessChanged") == 0,
+                "Dispose still unsubscribes the event Attach no longer subscribes.");
+        }
+        Check(Calls(Method("Simulant.UI.PresetControl", "btnStart_Click"), nameof(SimulantSimulationCompatibility.CanStart)) == 1,
+            "Starting a preset skips the readiness check.");
+        Check(Calls(Method("Simulant.Core.Zone.ZoneService", "TryEnterTerritory"), nameof(SimulantSimulationCompatibility.TraceLoad)) == 1,
+            "Loading a territory is not traced.");
+        Check(Calls(Method("Simulant.ACT.TriggernometryInterop", "GetEntityPtrs"), nameof(SimulantEntityCompatibility.UseLiveEntityPointers)) >= 1,
+            "Entity pointers are not read live.");
+        Console.WriteLine($"Simulant {version} static rewrite: {checks} checks passed; the assembly was not loaded.");
     }
 
     public static void RunOriginal(string dllPath, string bundledRoot)
