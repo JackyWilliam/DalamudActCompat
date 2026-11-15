@@ -896,6 +896,8 @@
   "Session expires {0:yyyy-MM-dd HH:mm}": "登入有效期至 {0:yyyy-MM-dd HH:mm}",
   "Set note…": "設定備註…",
   "Sets each player's width in the horizontal carousel.": "調整橫向滑動序列中每名玩家佔用的寬度。",
+  "Shrink modules to fit the window": "視窗放不下時收窄模組",
+  "When the window cannot hold everyone, each player's module narrows evenly until all fit, never wider than the module width above. Below a readable width the row scrolls instead.": "視窗放不下所有玩家時，把每名玩家的模組平均收窄到剛好放下，最寬不超過上方設定的模組寬度；窄到看不清時仍然左右滑動。",
   "Settings": "設定",
   "Settings & Account": "設定與帳號",
   "Settings & Account / Appearance & skins": "設定與帳號 / 外觀與佈景主題",

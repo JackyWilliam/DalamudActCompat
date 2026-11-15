@@ -165,8 +165,46 @@ public sealed class HorizontalMeterWindow : Window
             Profile.Slots,
             text,
             Muted,
-            Gold);
+            Gold,
+            maximumCellWidth: ResolveSummaryCellWidth(Profile.ItemWidth, Profile.FontScale),
+            cellSpacing: ItemSpacing);
     }
+
+    internal const float ItemSpacing = 18;
+
+    // Narrower than this a module cannot hold a job icon with a short name above one value.
+    internal const float MinimumFittedItemWidth = 96;
+
+    /// <summary>
+    /// The width each player gets. With fitting on, the modules share the window evenly once it
+    /// is too narrow for all of them, down to a readable minimum; past that they scroll as
+    /// before. They never grow beyond the configured width, so a wide window with two players
+    /// does not stretch them across the screen.
+    /// </summary>
+    internal static float ResolveItemWidth(
+        float bodyWidth,
+        int playerCount,
+        float configuredWidth,
+        bool fitToWindow,
+        float fontScale)
+    {
+        if (!fitToWindow || playerCount <= 0)
+        {
+            return configuredWidth;
+        }
+
+        var share = MathF.Floor((bodyWidth - ((playerCount - 1) * ItemSpacing)) / playerCount);
+        var minimum = Math.Min(configuredWidth, MinimumFittedItemWidth * Math.Clamp(fontScale, 0.75f, 1.8f));
+        return Math.Clamp(share, minimum, configuredWidth);
+    }
+
+    /// <summary>
+    /// Team totals used to split the whole window, which on a wide meter put a label at the far
+    /// left and its number a screen away. Each total now takes one player module, widened if the
+    /// module is too small for the label beside the number.
+    /// </summary>
+    internal static float ResolveSummaryCellWidth(float configuredWidth, float fontScale)
+        => Math.Max(configuredWidth, 200 * Math.Clamp(fontScale, 0.75f, 1.8f));
 
     private void DrawHeader(
         Encounter? encounter,
@@ -237,7 +275,9 @@ public sealed class HorizontalMeterWindow : Window
             text,
             Muted,
             Gold,
-            previewInteraction);
+            previewInteraction,
+            ResolveSummaryCellWidth(Profile.ItemWidth, Profile.FontScale),
+            ItemSpacing);
     }
 
     private float DrawPartyButtons(
@@ -367,8 +407,13 @@ public sealed class HorizontalMeterWindow : Window
         var bodyStart = ImGui.GetCursorScreenPos();
         ImGui.InvisibleButton("horizontal-player-slider", bodySize);
 
-        const float spacing = 18;
-        var itemWidth = Profile.ItemWidth;
+        const float spacing = ItemSpacing;
+        var itemWidth = ResolveItemWidth(
+            bodySize.X,
+            rows.Count,
+            Profile.ItemWidth,
+            Profile.FitItemsToWindow,
+            Profile.FontScale);
         var contentWidth = (rows.Count * itemWidth) + (Math.Max(0, rows.Count - 1) * spacing);
         var maximumOffset = Math.Max(0, contentWidth - bodySize.X);
         if (ImGui.IsItemHovered() && !(Profile.IsLocked && Profile.ClickThroughWhenLocked))
@@ -456,6 +501,15 @@ public sealed class HorizontalMeterWindow : Window
                     var value = MeterSlotPresentation.Value(placement.Slot.Metric, row, displayName,
                         placement.Slot.UseCompactHighestDamage, includeHighestDamageAmount);
                     var labelWidth = Math.Min(slotWidth * 0.47f, ImGui.CalcTextSize(label).X + 6);
+                    if (width < Profile.ItemWidth)
+                    {
+                        // A module narrowed to fit the window keeps its number whole and lets
+                        // the label give way: "D… 1…" tells nothing, "D… 15,870" still does.
+                        // Modules at their configured width are laid out exactly as before.
+                        labelWidth = Math.Clamp(slotWidth - ImGui.CalcTextSize(value).X - 5, 0, labelWidth);
+                        if (labelWidth < ImGui.GetFontSize()) labelWidth = 0;
+                    }
+                    if (labelWidth > 0)
                     MeterBackground.AddText(drawList,
                         slotStart + new Vector2(0, 3),
                         ImGui.GetColorU32(MeterBackground.Foreground(Muted)),
