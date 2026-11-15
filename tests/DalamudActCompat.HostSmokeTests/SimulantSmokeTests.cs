@@ -47,6 +47,65 @@ internal static class SimulantSmokeTests
         Throws(() => SimulantCompatibility.ValidateSignatures(new() { ["MissingFunction"] = "not found" }),
             "MissingFunction");
         SetPermissions(0);
+        RunVersionGuard();
+    }
+
+    // Upstream v0.1.0.0 (2026-11-14) no longer matches the rewriter and used to fail with
+    // "Sequence contains no matching element". A build newer than the adapted one is refused
+    // with the reason before anything of it is loaded; the adapted version is not affected.
+    private static void RunVersionGuard()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "Dact-Simulant-Version-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            string Write(Version version)
+            {
+                var path = Path.Combine(root, $"Simulant-{version}.dll");
+                using var definition = Mono.Cecil.AssemblyDefinition.CreateAssembly(
+                    new Mono.Cecil.AssemblyNameDefinition("Simulant", version), "Simulant.dll", Mono.Cecil.ModuleKind.Dll);
+                definition.Write(path);
+                return path;
+            }
+            var context = new System.Runtime.Loader.AssemblyLoadContext("simulant-version-guard", isCollectible: true);
+            foreach (var newer in new[] { new Version(0, 1, 0, 0), new Version(0, 0, 4, 3), new Version(1, 0, 0, 0) })
+            {
+                var newerPath = Write(newer);
+                try
+                {
+                    LegacyAssemblyRewriter.LoadSimulant(newerPath, context);
+                    throw new InvalidOperationException($"Simulant {newer} was not refused.");
+                }
+                catch (NotSupportedException refused)
+                {
+                    Assert(refused.Message.Contains($"v{newer}", StringComparison.Ordinal) &&
+                           refused.Message.Contains("v0.0.4.2", StringComparison.Ordinal) &&
+                           refused.Message.Contains("尚未适配", StringComparison.Ordinal),
+                        "The refusal must name the imported version, the adapted version and the reason.");
+                }
+            }
+            Assert(!context.Assemblies.Any(), "A refused Simulant build must not be loaded.");
+            // The adapted version and older ones still reach the rewriter itself: these empty
+            // fixtures stop at its first type lookup, not at the version message.
+            foreach (var adapted in new[] { new Version(0, 0, 4, 2), new Version(0, 0, 4, 1) })
+            {
+                try
+                {
+                    LegacyAssemblyRewriter.LoadSimulant(Write(adapted), context);
+                    throw new InvalidOperationException("An empty Simulant fixture cannot be rewritten.");
+                }
+                catch (TypeLoadException missing)
+                {
+                    Assert(missing.Message.Contains("Simulant.Core.PluginHost", StringComparison.Ordinal),
+                        $"Simulant {adapted} did not reach the rewriter.");
+                }
+            }
+            context.Unload();
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch (IOException) { }
+        }
     }
 
     public static void RunOriginal(string dllPath, string bundledRoot)

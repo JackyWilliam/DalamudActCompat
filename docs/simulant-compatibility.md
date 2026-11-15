@@ -36,6 +36,52 @@ FFXIV facade 同步绑定，替换 ACT 状态标签无限轮询及对应的无�
 上游发布说明标注 7.55。本机国服 `2026.09.01.0000.0000`（7.56）的磁盘 `.text` 节中，原版 DLL 的 64 组签名全部存在唯一匹配；这是静态检查，不验证运行时内存布局、地图切换、实体生成或防火墙恢复。
 上游目前没有声明许可证，未确认作者对适配的授权；DACT 仅提供兼容代码，不重新分发其源码或 DLL。
 
+## v0.1.0.0（尚未适配）
+
+上游在 2026-11-14 发布 v0.1.0.0（DLL 29,295,104 字节，SHA-256
+`00D06324641A00DC087D52BD4F2D7C55E5598CD92AF944207AC7C6C1F6F6A81F`）。对照 v0.0.4.2 共 40 个提交、208 个文件。
+以下结论来自源码差异和只读的 Mono.Cecil 检查（没有加载或运行新版 DLL），未做游戏内验证。
+
+DACT 目前不加载高于 v0.0.4.2 的版本：Host 在改写前比较程序集版本，拒绝并提示重新导入 v0.0.4.2。
+在加入这条提示之前，v0.1.0.0 会停在改写器的第一处查找上，只显示 `Sequence contains no matching element`。
+
+同一套静态检查在 v0.0.4.2 上 38 项全部成立，在 v0.1.0.0 上有 7 项不成立：
+
+| 适配点 | v0.1.0.0 的变化 |
+| --- | --- |
+| `PluginHost.Dispose` 里去掉 `remove_ProcessChanged` | 退订移进了清理用的闭包方法，`Dispose` 方法体里已经没有这条调用 |
+| `FirewallService.SendHookEnable` 的三处改写（转移已有跳转、就近分配代码洞、5 字节入口） | 该方法只剩 6 条指令的转发，逻辑搬到 `SendHookEnableCore`，写入改为 `WriteExact` |
+| `EnableFirewall` 反射读写 `_onReceiveOriginal`、`_sendHookCave`、`_sendHookOriginal` | 三个字段都没有了，状态改记在 `HookState`（`_receive` / `_send`） |
+
+上游的发包 Hook 仍然把入口的 15 字节原样抄进代码洞，再在入口写 15 字节的绝对跳转。入口已被卫月或其他插件
+Hook 时的两个问题（抄走的相对跳转失效、15 字节覆盖别人回跳的位置）在新版里依旧存在，这部分适配要按新结构重做。
+签名扫描有失败项时上游仍会把插件标记为初始化完成，`ValidateSignatures` 仍需保留。
+
+新版对宿主环境的新要求：
+
+- **鲶鱼精邮差 1.3.6.7 以上。** `NamazuInterop.Init` 检查程序集版本，`NamazuPlugin` 反射读取 `State` 和
+  `CallScheduler`。随包的官方 1.3.6.6 有 `State`、没有 `CallScheduler`，初始化会被「PostNamazu 版本过低」挡住。
+  上游 GitHub 的正式发布仍是 1.3.6.6。
+- **进程与区域订阅。** `Attach` 现在订阅 `ProcessChanged` 和 `ZoneChanged`，用来在换进程、换地图时让实体、
+  小队、防火墙记录失效。DACT 把 `Attach` 整个换成同步绑定，这两个订阅会一起丢掉，需要改成绑定后经门面订阅。
+- **自动更新。** 新增 `PluginUpdater`，「自动安装更新」默认开启：每次启用时访问 GitHub（失败时改查 123 网盘的
+  版本号），有新版就下载 `Simulant.dll` 并原地替换 ACT 登记的插件文件。在 DACT 里这个文件是用户导入后保存的
+  那一份，而手动导入的扩展加载时不复核导入时记下的哈希——替换后的新代码会沿用已有授权。适配时需要先定策略。
+- **配置文件。** 新增 `Application.StartupPath\Config\Simulant.config.xml`。在 Host 里这是按 DACT 版本区分的
+  Host 目录，更新 DACT 后配置会丢，需要改到扩展自己的配置目录。
+- **解析插件断流提示。** `SuspendNetworkTimeout` 反射解析插件的私有字段 `_dataCollection._monitor`。DACT 的门面
+  没有这些字段，调用会抛出；上游已捕获并只记一条警告，不影响开启防火墙。
+
+可能不再需要的适配：开始模拟前的就绪检查（上游的 `GetStartBlockReason` 和区域比对已覆盖大部分，但不要求已进入
+模拟区域）、防火墙开启失败的回滚（上游新增 `EnableWithRollback`，顺序为先收包后发包）、实体即时查询
+（上游新增 `EntityRegistry` 直接读取原生对象表）。这些要在适配时逐项确认后再删。
+
+新增的原生功能（模拟小队写入 GroupManager / UIState、UpdateParty / UpdateHate 包、网络实体生成、场地标点）
+全部经鲶鱼精邮差的内存接口执行，只能在游戏内验证。
+
+上游主分支在 v0.1.0.0 之后一天内又有 15 个提交，其中引入 Lumina 读取游戏资源并删除了内嵌 CSV，下一个版本还会
+带来新的依赖和游戏数据路径。v0.1.0.0 标签里没有许可证文件；主分支随后加入了 GPL-3.0 的 LICENSE。
+
 ## 维护者验证
 
 常规 Package / Host smoke 覆盖手动导入前无安装记录、专用分类、默认权限、全部 8 种权限组合与签名检查。
