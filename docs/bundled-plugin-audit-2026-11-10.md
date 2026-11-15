@@ -119,3 +119,26 @@ Unscrambler 7.58.0 的 `Constants758`：GameVersion `2026.11.03.0000.0000`、密
   （开始时间、时长）、把 `0x0356` 交给排队处理器（位置、等待时间）；7.57 旧编号、`F009` 占位与反方向包不识别。
   银山雀儿 opcodes.json 两地区 FateInfo 归一化为 `0x0374`。
 - 两个编号暂无第二份独立公开表，FATE 提醒与跨服排队需在游戏内确认。
+
+# 1.0.0.8 发布前复查：Cactbot 0.37.6
+
+2026-11-14 复查（对照 1.0.0.7）。三道依赖门禁：解析器 FFXIV_ACT_Plugin 3.0.3.5 / IINACT 2.10.3.12 current；
+随包 ACT 插件 current；Cactbot 门禁报告官方已发布 v0.37.6，随包仍是 0.37.5——发布流水线要求随包为最新，
+本版同步。
+
+| 组件 | 1.0.0.7 | 1.0.0.8 | 依据 |
+| --- | --- | --- | --- |
+| Cactbot | 0.37.5 | 0.37.6 | [官方发布 v0.37.6](https://github.com/OverlayPlugin/cactbot/releases/tag/v0.37.6)（2026-11-13 01:27Z）；`tools/sync-cactbot.ps1` 下载 `cactbot-0.37.6.zip`（10,898,384 字节），SHA-256 `46a85b88…b046c4` 与 GitHub 资产摘要一致 |
+
+上游 0.37.6 的内容：绝妖星 P3–P5 时间轴与语音、P4 提醒，驯兽师职业支持，7.56 与 7.58 资源，北角与多语言翻译。
+这是 DACT 第一次升级随包 Cactbot：已安装的旧版在 `CactbotOverlay.dll` 版本低于随包版本时由
+`CactbotPackageInstaller` 解到暂存目录、保留 `user/` 后整体替换，失败时退回原安装。
+
+其余上游（2026-11-14 实时接口）：
+
+- 无新版本：IINACT 2.10.3.12、OverlayPlugin 0.19.112、FFXIV_ACT_Plugin 3.0.3.5、Unscrambler.XIV 7.58.0、
+  Machina `2bd9a7d`（v2.4.8.3）、FFXIVOpcodes `e57eacf`、PostNamazu 1.3.6.6、ACT.FoxTTS 3.3.1、
+  Triggernometry new 分支 `3f5f503`（2.4.3.1 源码，发布包门禁仍为 2.4.3.0 current）、抹茶 `fb92f67`。
+- 仿生石（Simulant）在 2026-11-14 发布 [v0.1.0.0](https://github.com/MnFeN/Simulant/releases/tag/v0.1.0.0)
+  （重构时间轴、模拟小队列表、自动更新、国服 7.58 数据等）。DACT 的仿生石适配与 CI 夹具仍是 v0.0.4.2，
+  新版未核对，本版不涉及，另行评估。

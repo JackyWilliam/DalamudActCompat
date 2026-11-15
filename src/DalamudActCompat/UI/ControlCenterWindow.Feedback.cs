@@ -5,19 +5,20 @@ using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
 
-// 反馈 (features.js feedbackDialog): a centred dialog from the header's feedback button (or
-// handed over by AI 助手 with the description filled in). It goes to DACT Cloud's 反馈 column;
-// the developer replies in 好友 ·「官方通知」. 我的反馈 (设置 · 解析器与诊断) lists past ones.
+// 反馈 (features.js feedbackDialog): opened from the header's feedback button (or handed over by
+// AI 助手 with the description filled in). It goes to DACT Cloud's 反馈 column; the developer
+// replies in 好友 ·「官方通知」. 我的反馈 (设置 · 解析器与诊断) lists past ones. The form is drawn by
+// its own FeedbackWindow rather than a modal dialog here: see that class for why.
 public sealed partial class ControlCenterWindow
 {
-    private const string FeedbackDialog = "##dact-feedback";
     private const string MyFeedbackDialog = "##dact-my-feedback";
+    // UTF-8 bytes, as before the box wrapped; the server's limit is measured on the same text.
+    private const int MaximumFeedbackBytes = 4000;
     private const int MaximumScreenshots = 3;
     private const long MaximumScreenshotBytes = 2 * 1024 * 1024;
     // Diagnostic reports are bounded on the server too; this keeps the request reasonable.
     private const int MaximumDiagnosticsLength = 400_000;
 
-    private bool feedbackRequested;
     private int feedbackKind;
     private string feedbackText = string.Empty;
     private bool feedbackPrefilled;
@@ -39,10 +40,24 @@ public sealed partial class ControlCenterWindow
     // Opens a file picker for screenshots; the callback receives the chosen image paths.
     internal Action<Action<IReadOnlyList<string>>>? PickScreenshots { get; set; }
 
+    // Shows the FeedbackWindow; set by the plugin, which owns the window system.
+    internal Action? ShowFeedbackWindow { get; set; }
+
+    internal Func<bool>? IsFeedbackWindowOpen { get; set; }
+
+    // Where the control center was last drawn, so the feedback window can open over it.
+    internal (Vector2 Min, Vector2 Max)? ShellBounds { get; private set; }
+
     // prefill / conversation come from AI 助手's hand-over ("AI 转交").
     public void OpenFeedback(string? prefill = null, string? conversation = null, int conversationMessages = 0)
     {
-        feedbackRequested = true;
+        // The window no longer blocks the feedback buttons, so pressing one again while a draft
+        // is open only brings it forward; an AI hand-over still replaces the draft as asked.
+        if (prefill is null && conversation is null && IsFeedbackWindowOpen?.Invoke() == true)
+        {
+            ShowFeedbackWindow?.Invoke();
+            return;
+        }
         feedbackKind = 0;
         feedbackText = prefill ?? string.Empty;
         feedbackPrefilled = prefill is not null;
@@ -53,20 +68,17 @@ public sealed partial class ControlCenterWindow
         feedbackImages.Clear();
         feedbackSending = null;
         feedbackError = null;
+        ShowFeedbackWindow?.Invoke();
     }
 
-    private void DrawFeedbackDialog(CloudClientSnapshot snapshot)
+    // The feedback form, drawn inside FeedbackWindow. Returns true when the window should close.
+    internal bool DrawFeedbackForm()
     {
-        if (feedbackRequested)
-        {
-            feedbackRequested = false;
-            DactUi.OpenDialog(FeedbackDialog);
-        }
-        DrawMyFeedbackDialog();
-        if (!DactUi.BeginDialog(FeedbackDialog, 500, padding: 18)) return;
+        var snapshot = cloud.GetSnapshot();
         var s = DactUi.S;
         var palette = DactTheme.Palette;
         var width = ImGui.GetContentRegionAvail().X;
+        var closeForm = false;
 
         var top = ImGui.GetCursorScreenPos();
         DactIcons.Draw(ImGui.GetWindowDrawList(), "feedback", top + new Vector2(0, 2 * s), 16 * s, palette.Gold);
@@ -85,7 +97,7 @@ public sealed partial class ControlCenterWindow
         ImGui.PushStyleVar(ImGuiStyleVar.FrameBorderSize, Math.Max(1, s));
         ImGui.PushStyleColor(ImGuiCol.FrameBg, DactUi.Field);
         ImGui.PushStyleColor(ImGuiCol.Border, palette.Accent with { W = .8f });
-        ImGui.InputTextMultiline("##feedback-text", ref feedbackText, 4000, new Vector2(width, 96 * s), ImGuiInputTextFlags.None);
+        SoftWrapTextBox.Draw("##feedback-text", ref feedbackText, MaximumFeedbackBytes, new Vector2(width, 96 * s));
         ImGui.PopStyleColor(2);
         ImGui.PopStyleVar(3);
         DactUi.EndField(feedbackPrefilled
@@ -109,14 +121,11 @@ public sealed partial class ControlCenterWindow
         var addLabel = text.Get("添加截图", "Add screenshot");
         if (DactUi.Button(addLabel + "##feedback-shot", icon: "plus", disabled: feedbackImages.Count >= MaximumScreenshots || PickScreenshots is null))
         {
-            // A modal blocks every window outside it, the file picker included, so the dialog
-            // steps aside while a screenshot is picked and comes back with what was typed.
-            DactUi.CloseDialog(FeedbackDialog);
+            // The picker opens beside this window, which stays open with what was typed.
             PickScreenshots?.Invoke(paths =>
             {
                 foreach (var path in paths)
                     if (feedbackImages.Count < MaximumScreenshots && !feedbackImages.Contains(path, StringComparer.OrdinalIgnoreCase)) feedbackImages.Add(path);
-                feedbackRequested = true;
             });
         }
         ImGui.SameLine(0, 8 * s);
@@ -143,7 +152,7 @@ public sealed partial class ControlCenterWindow
             DactUi.HintColor, DactFonts.Small, width - buttons - 12 * s);
         var after = ImGui.GetCursorPos();
         ImGui.SetCursorPos(new Vector2(footer.X + width - buttons, footer.Y));
-        if (DactUi.Button(cancelLabel + "##feedback-cancel") || close) DactUi.CloseDialog(FeedbackDialog);
+        if (DactUi.Button(cancelLabel + "##feedback-cancel") || close) closeForm = true;
         ImGui.SameLine(0, 8 * s);
         var busy = feedbackSending is { IsCompleted: false };
         if (DactUi.Button(sendLabel + "##feedback-send", ButtonKind.Primary, "send", disabled: busy || string.IsNullOrWhiteSpace(feedbackText) || !snapshot.CanUseDact))
@@ -157,12 +166,13 @@ public sealed partial class ControlCenterWindow
             if (done.IsCompletedSuccessfully)
             {
                 feedbackSentNotice = text.Get("反馈已发送，开发者会在 好友 ·「官方通知」里回复你。", "Feedback sent. The developer replies in Friends · DACT announcements.");
-                DactUi.CloseDialog(FeedbackDialog);
+                closeForm = true;
             }
             else feedbackError = FeedbackErrorText(done.Exception?.GetBaseException());
         }
-        if (ImGui.IsKeyPressed(ImGuiKey.Escape) && !busy) DactUi.CloseDialog(FeedbackDialog);
-        DactUi.EndDialog(FeedbackDialog);
+        // Esc belongs to whichever window has focus; the game and other windows keep theirs.
+        if (ImGui.IsKeyPressed(ImGuiKey.Escape) && !busy && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows)) closeForm = true;
+        return closeForm;
     }
 
     // A checkbox row with a muted note and an optional ghost action; returns true for the action.

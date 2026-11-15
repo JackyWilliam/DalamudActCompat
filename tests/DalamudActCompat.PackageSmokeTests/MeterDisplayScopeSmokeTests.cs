@@ -147,6 +147,21 @@ internal static class MeterDisplayScopeSmokeTests
         Check(IinactAdapter.HasMeaningfulActivity(outside), "Outside-only parsed activity was discarded by the adapter.");
         store.ResetCurrent();
         Check(store.GetDisplayEncounter() is null && store.GetDisplayEncounter(true) is null, "Reset left a stale parser view.");
+
+        // Reported on 1.0.0.7: solo at Wolves' Den Pier, nothing fought yet, so there was no party
+        // view to retain and strangers on the dummies ran the meter's timer over an empty list.
+        store.UpdateCurrent(outside);
+        Check(store.GetDisplayEncounter() is null && store.GetDisplayEncounter(true)!.Id == outside.Id,
+            "The party view ran a timer for an encounter only outside players fought in.");
+        // The same encounter is shown again as soon as the party has something in it.
+        store.UpdateCurrent(outside with { Combatants = party.Combatants });
+        Check(store.GetDisplayEncounter()!.Id == outside.Id, "The party's own data did not bring the encounter back.");
+        // A pull whose only party activity so far is a death is still the party's pull.
+        store.ResetCurrent();
+        var fallen = outside with { Combatants = [party.Combatants[0] with { TotalDamage = 0, TotalHealing = 0, Deaths = 1 }] };
+        store.UpdateCurrent(fallen);
+        Check(store.GetDisplayEncounter()!.Id == fallen.Id, "A pull with only a party death was hidden as outside-only.");
+        store.ResetCurrent();
     }
 
     private static void VerifyActPublication()

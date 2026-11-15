@@ -221,7 +221,9 @@ public sealed class EncounterWindow : Window
                 }
                 if (expanded)
                 {
-                    for (var index = 0; index < encounter.SegmentRecords.Count; index++)
+                    // Newest pull first, like the folders above it: after an evening of progression
+                    // the pull just finished is the one wanted, not record 1. Numbers stay in pull order.
+                    for (var index = encounter.SegmentRecords.Count - 1; index >= 0; index--)
                     {
                         var segment = encounter.SegmentRecords[index];
                         if (DrawSegmentListCard(

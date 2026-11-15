@@ -8,6 +8,9 @@ internal static class ProgressionPhaseSmokeTests
 {
     private const uint Fru = 1238;
     private const uint Fatebreaker = 9707, Usurper = 12809, Oracle = 9832, Pandora = 13561, IceVeil = 9358, CrystalOfLight = 13555;
+    private const uint Uwu = 777;
+    private const uint Garuda = 1644, Chirada = 1645, Suparna = 1646, Ifrit = 1185, InfernalNail = 1186, Titan = 1801,
+        Lahabrea = 2143, UltimaWeapon = 2137;
 
     internal static async Task RunAsync(string testRoot)
     {
@@ -32,6 +35,38 @@ internal static class ProgressionPhaseSmokeTests
             Check(phase == expected, $"Futures Rewritten after seeing {string.Join(",", seen)} was P{phase}, FFLogs says P{expected}.");
         }
         Check(FflogsPhases.Next(1363, 3, _ => true) == 3 && !FflogsPhases.Covers(1363), "A fight without FFLogs phase starts changed phase.");
+
+        // The Weapon's Refrain: a player reported P5 on first reaching Titan. Garuda's sisters and
+        // Ifrit's nails become the largest target while the primal is away; they are not phases.
+        (uint[] Seen, int Phase)[] uwu =
+        [
+            ([Garuda], 1),
+            ([Chirada, Suparna], 1),
+            ([Garuda], 1),
+            ([Ifrit], 2),
+            ([InfernalNail], 2),
+            ([Ifrit], 2),
+            ([Titan], 3),
+            ([Lahabrea], 4),
+            ([UltimaWeapon], 5),
+            // The primals Ultima calls back never return the pull to an earlier phase.
+            ([UltimaWeapon, Garuda, Ifrit, Titan], 5),
+        ];
+        phase = 1;
+        foreach (var (seen, expected) in uwu)
+        {
+            foreach (var id in seen) phase = FflogsPhases.Next(Uwu, phase, candidate => candidate == id);
+            Check(phase == expected, $"The Weapon's Refrain after seeing {string.Join(",", seen)} was P{phase}, FFLogs says P{expected}.");
+        }
+        var uwuNames = new Dictionary<uint, string>
+        {
+            [Garuda] = "迦楼罗", [Ifrit] = "伊弗利特", [Titan] = "泰坦", [Lahabrea] = "拉哈布雷亚", [UltimaWeapon] = "究极神兵",
+        };
+        var reported = new ProgressionPull(Uwu, "究极神兵绝境战", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddMinutes(6), false,
+            ["迦楼罗", "妙翅", "迦楼罗", "伊弗利特", "泰坦"], .7, null, 300);
+        Check(reported.Phase == 5, "The reported Weapon's Refrain pull no longer reproduces the old P5.");
+        Check(FflogsPhases.Restore(reported, id => uwuNames.GetValueOrDefault(id)).Phase == 3,
+            "A saved Weapon's Refrain pull that reached Titan did not read P3.");
 
         // Pulls saved before the table: the old main-boss list replays to FFLogs' phase in the client's
         // language; one recorded in another language keeps its old count rather than a wrong guess.
@@ -70,7 +105,7 @@ internal static class ProgressionPhaseSmokeTests
         using (var document = JsonDocument.Parse(File.ReadAllText(path)))
             Check(document.RootElement.EnumerateArray().All(item => item.GetProperty("FflogsPhase").GetInt32() > 0), "FFLogs phase was not written.");
 
-        Console.WriteLine("Progression phases: Futures Rewritten matches FFLogs P1–P5 (intermission, returning bosses, old saves, other languages and fights) passed.");
+        Console.WriteLine("Progression phases: Futures Rewritten and The Weapon's Refrain match FFLogs P1–P5 (intermission, adds, returning bosses, old saves, other languages and fights) passed.");
     }
 
     private static void Check(bool condition, string message)

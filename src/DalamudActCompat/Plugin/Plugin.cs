@@ -85,6 +85,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly ControlCenterWindow settingsWindow;
     private readonly HelpWindow helpWindow;
     private readonly SearchWindow searchWindow;
+    private readonly FeedbackWindow feedbackWindow;
     private readonly SearchHotkey searchHotkey;
     private readonly SettingsWindow advancedSettingsWindow;
     private readonly StatusWindow statusWindow;
@@ -816,7 +817,11 @@ public sealed class Plugin : IDalamudPlugin
         searchWindow = new SearchWindow(settingsWindow);
         settingsWindow.SearchShortcut = searchHotkey;
         settingsWindow.OpenSearchWindow = () => { if (!searchWindow.IsOpen) searchWindow.ToggleSearch(); };
-        meterStyleEditorWindow.OpenFeedback = () => { settingsWindow.ShowAnimated(); settingsWindow.OpenFeedback(); };
+        feedbackWindow = new FeedbackWindow(settingsWindow);
+        settingsWindow.ShowFeedbackWindow = feedbackWindow.Present;
+        settingsWindow.IsFeedbackWindowOpen = () => feedbackWindow.IsOpen;
+        // The form has its own window now, so the layout editor no longer opens the control center for it.
+        meterStyleEditorWindow.OpenFeedback = () => settingsWindow.OpenFeedback();
         meterStyleEditorWindow.OpenHelp = () => helpWindow.OpenTopic("CombatMeter");
         meterStyleEditorWindow.OpenMeterSettings = settingsWindow.ShowMeterPage;
         var aiKeys = new DalamudActCompat.Ai.AiKeyStore(paths.AiKeyDirectory, paths.AiKeyFile);
@@ -899,6 +904,7 @@ public sealed class Plugin : IDalamudPlugin
         windowSystem.AddWindow(cloudBanNoticeWindow);
         windowSystem.AddWindow(launcherWindow);
         windowSystem.AddWindow(searchWindow);
+        windowSystem.AddWindow(feedbackWindow);
         filePicker = new DactFilePicker(text, logoTexture);
         windowSystem.AddWindow(filePicker);
         // Authentication gates functional windows; account state changes only notify.
@@ -1321,6 +1327,7 @@ public sealed class Plugin : IDalamudPlugin
         meterStyleEditorWindow.IsOpen = false;
         simplifiedHomeWindow.IsOpen = false;
         searchWindow.IsOpen = false;
+        feedbackWindow.IsOpen = false;
     }
 
     private void RestoreWindowsAfterAuthenticationGate()

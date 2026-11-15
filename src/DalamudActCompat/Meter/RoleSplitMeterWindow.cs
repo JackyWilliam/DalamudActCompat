@@ -42,6 +42,7 @@ public sealed class RoleSplitMeterWindow : Window
     private float heightAnimationTarget;
     private float? submittedWindowHeight;
     private bool observedFollowScope;
+    private bool listScrollsHorizontally;
 
     public RoleSplitMeterWindow(
         MeterService meterService,
@@ -213,8 +214,9 @@ public sealed class RoleSplitMeterWindow : Window
             var retained = groupRows.FirstOrDefault(static row => row.IsLocalPlayer) ?? groupRows[0];
             groupRows = [retained];
         }
-        DrawSection(groupRows, encounter, useHealing);
-        ImGui.Dummy(new Vector2(1, 4));
+        listScrollsHorizontally = DrawSection(groupRows, encounter, useHealing);
+        // The summary follows the list directly: the list leaves exactly the summary's height
+        // below itself, and anything drawn in between made the whole window scroll.
         MeterSlotPresentation.DrawTeamSummary(
             useHealing ? "role-split-healer" : "role-split-damage",
             encounter,
@@ -245,7 +247,6 @@ public sealed class RoleSplitMeterWindow : Window
             groupRows = [retained];
         }
         DrawSection(groupRows, encounter, useHealing, previewInteraction);
-        ImGui.Dummy(new Vector2(1, 4));
         MeterSlotPresentation.DrawTeamSummary(
             useHealing ? "role-editor-healer" : "role-editor-damage",
             encounter,
@@ -354,17 +355,24 @@ public sealed class RoleSplitMeterWindow : Window
         }
         else
         {
+            var style = ImGui.GetStyle();
             var summaryMetric = useHealing
                 ? MeterSlotMetric.TotalHealing
                 : MeterSlotMetric.TotalDamage;
             var summaryHeight = Slots.Any(slot =>
                 slot.Visible && (slot.Metric == summaryMetric || slot.Metric == MeterSlotMetric.TeamDps))
-                    ? MeterSlotPresentation.TeamSummaryHeight + 4
+                    ? style.ItemSpacing.Y + MeterSlotPresentation.TeamSummaryHeight
                     : 0;
-            targetHeight = 42 +
-                           (Profile.ShowHeader ? 37 : 0) +
-                           MeterWindow.CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()) +
-                           summaryHeight;
+            // Exactly what is drawn: the header bar and its gap (each followed by one spacing),
+            // one list row with its column header, and the summary. Fixed allowances fell short
+            // of this, so a collapsed pane scrolled both as a window and inside its list.
+            targetHeight = MathF.Ceiling(
+                (style.WindowPadding.Y * 2) +
+                (Profile.ShowHeader ? 34 + 3 + (style.ItemSpacing.Y * 2) : 0) +
+                MeterWindow.CalculateSingleRowListHeight(ImGui.GetTextLineHeightWithSpacing(), style.ItemSpacing.Y) +
+                (listScrollsHorizontally ? style.ScrollbarSize : 0) +
+                summaryHeight +
+                2);
         }
         BeginWindowHeightAnimation(Math.Max(CompactWindowMinimumHeight, targetHeight));
     }
@@ -431,7 +439,8 @@ public sealed class RoleSplitMeterWindow : Window
         submittedWindowHeight = height;
     }
 
-    private void DrawSection(
+    // Returns whether the list needed its horizontal scrollbar.
+    private bool DrawSection(
         IReadOnlyList<CombatantRow> rows,
         Encounter encounter,
         bool useHealing,
@@ -440,10 +449,10 @@ public sealed class RoleSplitMeterWindow : Window
         if (rows.Count == 0)
         {
             ImGui.TextDisabled(text.Get("暂无玩家", "No players"));
-            return;
+            return false;
         }
 
-        classicRenderer.DrawClassicTable(
+        return classicRenderer.DrawClassicTable(
             encounter,
             rows,
             CreateTableSettings(useHealing),

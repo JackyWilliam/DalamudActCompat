@@ -46,10 +46,10 @@ own plugin configuration directory; on a later DalamudActCompat update, it
 upgrades older bundled Cactbot versions without overwriting files under
 `cactbot/user/`.
 
-- OverlayPlugin/cactbot 0.37.5
+- OverlayPlugin/cactbot 0.37.6
   - Project/source: <https://github.com/OverlayPlugin/cactbot>
-  - Release: <https://github.com/OverlayPlugin/cactbot/releases/tag/v0.37.5>
-  - Package: <https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.5/cactbot-0.37.5.zip>
+  - Release: <https://github.com/OverlayPlugin/cactbot/releases/tag/v0.37.6>
+  - Package: <https://github.com/OverlayPlugin/cactbot/releases/download/v0.37.6/cactbot-0.37.6.zip>
   - License: Apache-2.0; the license text is included with the bundled package.
 
 `FFXIV_ACT_Plugin` and its SDK assemblies are official binary dependencies.

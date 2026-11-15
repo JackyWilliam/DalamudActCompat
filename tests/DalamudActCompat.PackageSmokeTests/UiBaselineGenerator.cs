@@ -357,6 +357,15 @@ internal static class UiBaselineGenerator
                     foreach (var (settings, _, _) in saved) { settings.AutoHideOutOfCombat = true; settings.AutoHideDelaySeconds = 30; }
                     ControlCapture("Overlays-脱战隐藏延时", "悬浮窗 · 脱战隐藏打开后的延时设置", false);
                     foreach (var (settings, autoHide, delay) in saved) { settings.AutoHideOutOfCombat = autoHide; settings.AutoHideDelaySeconds = delay; }
+                    // The details' 「⋯」 menu, opened by a click on the button (top right of the details
+                    // panel at the default size), so its padding can be reviewed.
+                    var overlayArea = controlSize + new Vector2(20);
+                    Frame(control, new(10), controlSize, overlayArea, () => io.AddMousePosEvent(877, 262));
+                    Frame(control, new(10), controlSize, overlayArea, () => io.AddMouseButtonEvent(0, true));
+                    Frame(control, new(10), controlSize, overlayArea, () => io.AddMouseButtonEvent(0, false));
+                    ControlCapture("Overlays-更多菜单", "悬浮窗 · 详情右上角「⋯」菜单", false);
+                    Frame(control, new(10), controlSize, overlayArea, () => { io.AddMousePosEvent(-1, -1); ImGui.OpenPopup("##baseline-close-popovers"); });
+                    Frame(control, new(10), controlSize, overlayArea, null);
                 }
                 if (page.ToString() == "Friends")
                 {
@@ -491,10 +500,16 @@ internal static class UiBaselineGenerator
                 startDirectory: pickerFolder);
             Capture("01 控制中心", "选文件窗口", picker, new Vector2(780, 520), "安装 DLL / ZIP 等选文件、选目录窗口（DACT 样式）");
             picker.IsOpen = false;
-            control.OpenFeedback("触发器不播报、邮差标点没反应。AI 诊断：共享 Host 重启后恢复运行，但触发器每次报「找不到语音引擎」，本机无法修复。", "（AI 对话）", 4);
-            ControlCapture("Overview-反馈", "反馈（AI 转交）", false);
-            DalamudActCompat.UI.Kit.DactUi.CloseDialog("##dact-feedback");
-            ControlCapture("Overview-反馈已关闭", "确认弹窗关闭后不残留", false);
+            // 反馈 is its own window (it no longer locks the game or other windows); a long
+            // description wraps inside the box instead of running off its right edge.
+            var feedbackWindow = new FeedbackWindow(control);
+            control.ShowFeedbackWindow = feedbackWindow.Present;
+            control.OpenFeedback("触发器不播报、邮差标点没反应。AI 诊断：共享 Host 重启后恢复运行，但触发器每次报「找不到语音引擎」，本机无法修复。" +
+                "Then a long English sentence checks that words move to the next line whole instead of being split in the middle.", "（AI 对话）", 4);
+            Capture("01 控制中心", "反馈（AI 转交）", feedbackWindow, null, "独立的反馈窗口（AI 转交，长描述自动换行）",
+                display: new Vector2(540, 560));
+            feedbackWindow.IsOpen = false;
+            ControlCapture("Overview-反馈已关闭", "反馈窗口不在控制中心里留下遮罩", false);
             typeof(ControlCenterWindow).GetField("cloudChipAnchor", Private)!.SetValue(control, new Vector2(806, 54));
             typeof(ControlCenterWindow).GetField("cloudQuickPopupRequested", Private)!.SetValue(control, true);
             ControlCapture("Overview-云同步状态", "顶栏 · 云同步状态浮层（最后拍，弹层不会挡住其他页面）", false);
