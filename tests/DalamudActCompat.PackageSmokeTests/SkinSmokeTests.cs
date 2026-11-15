@@ -194,7 +194,7 @@ internal static partial class SkinSmokeTests
     {
         var config = JsonConvert.DeserializeObject<PluginConfiguration>("""{"Version":16,"Appearance":{"SelectedSkin":"eorzea","SponsorTier":10,"UnlockedEasterEggs":["eorzea","bogus"]},"Meter":{"HorizontalWindow":{"BackgroundOpacity":0.85}}}""")!;
         config.ApplyMigrations();
-        Check(config.Version == 18 && config.Meter.HorizontalWindow.BackgroundOpacity == 0, "Migration changed the old horizontal appearance.");
+        Check(config.Version == 19 && config.Meter.HorizontalWindow.BackgroundOpacity == 0, "Migration changed the old horizontal appearance.");
         // A known sponsor skin is never a discovery. An unknown ID may be a newer client's
         // easter egg and is kept, but it unlocks nothing in this build.
         Check(config.Appearance.UnlockedEasterEggs.SetEquals(["bogus"]) && SkinCatalog.Resolve(config.Appearance, true, 0) == SkinCatalog.Default,
@@ -294,7 +294,10 @@ internal static partial class SkinSmokeTests
     private static unsafe void Native()
     {
         var library = Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") ?? throw new Exception("Set DACT_TEST_CIMGUI.");
-        File.Copy(library, Path.Combine(AppContext.BaseDirectory, "cimgui.dll"), true);
+        // --skins-only reaches this after the help window's native check has already loaded the
+        // copy beside the tests, which Windows then refuses to overwrite.
+        try { File.Copy(library, Path.Combine(AppContext.BaseDirectory, "cimgui.dll"), true); }
+        catch (IOException) when (File.Exists(Path.Combine(AppContext.BaseDirectory, "cimgui.dll"))) { }
         NativeLibrary.Load(library);
         var context = ImGui.CreateContext();
         try

@@ -22,22 +22,41 @@ internal static class ParserScopeSmokeTests
 
     public static void Run(bool native = false)
     {
+        // 1.0.0.8: the default is Auto. "Everyone" was the untouched default before, so stored
+        // configurations move to Auto once; a meter following the parse scope keeps Everyone.
+        Check(new PluginConfiguration().ParserScope == ParserScope.Auto, "A new configuration does not default to Auto.");
         var legacy = JsonConvert.DeserializeObject<PluginConfiguration>("{\"Version\":17}")!;
         legacy.ApplyMigrations();
-        Check(legacy.ParserScope == ParserScope.All, "Legacy configuration no longer parses everyone.");
+        Check(legacy.ParserScope == ParserScope.Auto, "A configuration from before the setting did not move to Auto.");
+        var stored = JsonConvert.DeserializeObject<PluginConfiguration>("{\"Version\":18,\"ParserScope\":0}")!;
+        Check(stored.ApplyMigrations() && stored.ParserScope == ParserScope.Auto && stored.Version == 19,
+            "A stored Everyone scope did not move to Auto on upgrade.");
+        stored.ParserScope = ParserScope.All;
+        Check(!stored.ApplyMigrations() && stored.ParserScope == ParserScope.All,
+            "Everyone chosen after the upgrade was changed again.");
+        var listUser = JsonConvert.DeserializeObject<PluginConfiguration>(
+            "{\"Version\":18,\"ParserScope\":0,\"Meter\":{\"DisplayScope\":1}}")!;
+        listUser.ApplyMigrations();
+        Check(listUser.ParserScope == ParserScope.All, "A meter following the parse scope lost Everyone.");
+        foreach (var kept in new[] { ParserScope.Self, ParserScope.Party, ParserScope.Alliance, ParserScope.Auto })
+        {
+            var chosen = JsonConvert.DeserializeObject<PluginConfiguration>($"{{\"Version\":18,\"ParserScope\":{(int)kept}}}")!;
+            chosen.ApplyMigrations();
+            Check(chosen.ParserScope == kept, $"The upgrade changed a stored {kept} scope.");
+        }
         foreach (var scope in Enum.GetValues<ParserScope>())
         {
             var configuration = new PluginConfiguration { ParserScope = scope };
             var snapshot = configuration.CreateSnapshot();
             configuration.ResetToDefaults("logs");
-            Check(configuration.ParserScope == ParserScope.All, "Factory reset retained the scope.");
+            Check(configuration.ParserScope == ParserScope.Auto, "Factory reset did not return the scope to Auto.");
             configuration.RestoreFrom(snapshot);
             var reloaded = JsonConvert.DeserializeObject<PluginConfiguration>(JsonConvert.SerializeObject(configuration))!;
             reloaded.ApplyMigrations();
             Check(reloaded.ParserScope == scope, "Snapshot restore or subsequent save lost the scope.");
         }
         legacy.ParserScope = (ParserScope)99;
-        Check(legacy.ApplyMigrations() && legacy.ParserScope == ParserScope.All,
+        Check(legacy.ApplyMigrations() && legacy.ParserScope == ParserScope.Auto,
             "An invalid scope could suppress all statistics.");
 
         // Exercise ACT's actual event filter, not a second implementation used as

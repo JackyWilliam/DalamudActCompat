@@ -65,6 +65,8 @@ public sealed class MeterWindow : Window
     private float heightAnimationStart;
     private float heightAnimationTarget;
     private float? submittedWindowHeight;
+    // From the previous frame's list; the collapsed height is decided before the list is drawn.
+    private bool classicListScrollsHorizontally;
     private bool locateOnNextDraw;
     private long locatePreviewExpiresAt;
 
@@ -242,7 +244,7 @@ public sealed class MeterWindow : Window
         }
         else
         {
-            DrawClassicTable(encounter, rows, settings, "classic-meter-rows");
+            classicListScrollsHorizontally = DrawClassicTable(encounter, rows, settings, "classic-meter-rows");
         }
         if (ShouldDrawTeamSummary(settings))
         {
@@ -706,15 +708,24 @@ public sealed class MeterWindow : Window
             return;
         }
 
-        var bodyHeight = settings.ClassicAllianceView
-            ? 34
-            : CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()) + 26;
-        var targetHeight = MathF.Ceiling(
-            (ImGui.GetStyle().WindowPadding.Y * 2) +
-            (settings.ShowHeader ? EncounterHeaderHeight : CompactDragHandleHeight) +
-            ImGui.GetStyle().ItemSpacing.Y +
-            bodyHeight +
-            2);
+        var style = ImGui.GetStyle();
+        // The self card is one column header and one row. Its height follows the font and the
+        // list's horizontal scrollbar; a fixed allowance left the row a few pixels short at
+        // larger font sizes, which showed as a scrollbar inside the collapsed meter.
+        var targetHeight = settings.ClassicAllianceView
+            ? MathF.Ceiling(
+                (style.WindowPadding.Y * 2) +
+                (settings.ShowHeader ? EncounterHeaderHeight : CompactDragHandleHeight) +
+                style.ItemSpacing.Y +
+                34 +
+                2)
+            : CalculateCompactWindowHeight(
+                settings.ShowHeader,
+                ImGui.GetTextLineHeightWithSpacing(),
+                style.WindowPadding.Y,
+                style.ItemSpacing.Y,
+                style.ScrollbarSize,
+                classicListScrollsHorizontally);
         BeginWindowHeightAnimation(targetHeight);
     }
 
@@ -920,7 +931,9 @@ public sealed class MeterWindow : Window
             MeterSlotPresentation.ResolveLocalPartyGroup(ranked));
     }
 
-    internal void DrawClassicTable(
+    // Returns whether the list needed its horizontal scrollbar, which a collapsed window must
+    // leave room for.
+    internal bool DrawClassicTable(
         Encounter encounter,
         IReadOnlyList<CombatantRow> rows,
         MeterSettings settings,
@@ -950,7 +963,8 @@ public sealed class MeterWindow : Window
         }
 
         var childHeight = Math.Max(
-            CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing()) + 26,
+            CalculateSingleRowListHeight(ImGui.GetTextLineHeightWithSpacing(), ImGui.GetStyle().ItemSpacing.Y) +
+            (useHorizontalScroll ? ImGui.GetStyle().ScrollbarSize : 0),
             ImGui.GetContentRegionAvail().Y - summaryReserve);
         // The parent and rows already draw the configured meter background.
         // A child fill would stack its opacity (or inherit the editor's skin).
@@ -984,6 +998,7 @@ public sealed class MeterWindow : Window
             }
         }
         ImGui.EndChild();
+        return useHorizontalScroll;
     }
 
     private void DrawAllianceCompactTiles(
@@ -1880,6 +1895,13 @@ public sealed class MeterWindow : Window
     internal static float CalculateCombatantRowHeight(float textLineHeightWithSpacing)
         => Math.Max(28, textLineHeightWithSpacing + 8);
 
+    // The column header, one row and the spacing between them: the smallest list that shows a
+    // player without scrolling. The header grows with the font, so this is not a constant.
+    internal static float CalculateSingleRowListHeight(float textLineHeightWithSpacing, float itemSpacingY)
+        => Math.Max(22, textLineHeightWithSpacing + 4) +
+           Math.Max(0, itemSpacingY) +
+           CalculateCombatantRowHeight(textLineHeightWithSpacing);
+
     internal static float CalculateCompactWindowHeight(
         bool showHeader,
         float textLineHeightWithSpacing,
@@ -1891,17 +1913,14 @@ public sealed class MeterWindow : Window
         var topSectionHeight = showHeader
             ? EncounterHeaderHeight
             : CompactDragHandleHeight;
-        var tableHeaderHeight = Math.Max(22, textLineHeightWithSpacing + 4);
-        var rowHeight = CalculateCombatantRowHeight(textLineHeightWithSpacing);
         var horizontalScrollbarHeight = useHorizontalScroll
             ? Math.Max(0, scrollbarSize)
             : 0;
         return MathF.Ceiling(
             (Math.Max(0, windowPaddingY) * 2) +
             topSectionHeight +
-            (Math.Max(0, itemSpacingY) * 2) +
-            tableHeaderHeight +
-            rowHeight +
+            Math.Max(0, itemSpacingY) +
+            CalculateSingleRowListHeight(textLineHeightWithSpacing, itemSpacingY) +
             horizontalScrollbarHeight +
             2);
     }

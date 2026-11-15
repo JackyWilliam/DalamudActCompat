@@ -27,9 +27,23 @@ public sealed class EncounterStateStore
                 return current;
             }
 
-            return (parserView ? latestParserDisplayableEncounter : latestDisplayableEncounter) ?? current;
+            var retained = parserView ? latestParserDisplayableEncounter : latestDisplayableEncounter;
+            if (retained is not null)
+            {
+                return retained;
+            }
+
+            // With "Everyone" parsed, strangers fighting nearby open an encounter that holds none
+            // of the party. The party view has no row for it, so showing it only ran an empty
+            // timer over "waiting for player data"; the parse-scope view still lists those players.
+            return !parserView && HasOnlyOutsiderActivity(current) ? null : current;
         }
     }
+
+    private static bool HasOnlyOutsiderActivity(Encounter? encounter)
+        => encounter is { ParsedPlayers: { } parsed } &&
+           !encounter.Combatants.Any(static player => player.TotalDamage > 0 || player.TotalHealing > 0 || player.Deaths > 0) &&
+           parsed.Any(static player => player.TotalDamage > 0 || player.TotalHealing > 0 || player.Deaths > 0);
 
     public void Replace(Encounter? current, IReadOnlyList<Encounter> recent)
     {

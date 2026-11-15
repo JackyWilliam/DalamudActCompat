@@ -37,7 +37,9 @@ internal static partial class SkinSmokeTests
              configuration.Meter.RoleSplitDamageWindow, configuration.Meter.RoleSplitHealerWindow];
     }
 
-    private static unsafe void MeterCollapseNative(NativeUiRasterizer raster, string? output, EmptyTexture logo)
+    // Internal so the meter layout check can run it in its own process: the skin suite that
+    // owns it stops at an older popup check before reaching the meters.
+    internal static unsafe void MeterCollapseNative(NativeUiRasterizer raster, string? output, EmptyTexture logo)
     {
         var io = ImGui.GetIO(); io.FontGlobalScale = 1; io.DisplaySize = new(1200, 900); io.DeltaTime = 1f / 60;
         DactTheme.SetCurrent(new(), false, 0);

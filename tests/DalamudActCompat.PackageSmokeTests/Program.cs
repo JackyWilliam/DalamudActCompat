@@ -140,6 +140,11 @@ try
         SoftWrapTextBoxNativeSmokeTests.Run();
         return 0;
     }
+    if (args.Contains("--meter-scrollbar-native-only", StringComparer.Ordinal))
+    {
+        MeterScrollbarNativeSmokeTests.Run();
+        return 0;
+    }
     if (args.Contains("--ban-recovery-only", StringComparer.Ordinal))
     {
         await CloudBanRecoverySmokeTests.RunAsync(testRoot);
@@ -807,7 +812,7 @@ static void ValidateGameRegionSelection()
     };
     Assert(
         configuration.ApplyMigrations() &&
-        configuration.Version == 18 &&
+        configuration.Version == 19 &&
         configuration.GameRegionMode == GameRegionMode.Auto,
         "Existing configurations were not migrated to automatic region detection.");
 
@@ -2468,7 +2473,7 @@ static void ValidateMeterRows()
     };
     Assert(
         legacyConfiguration.ApplyMigrations() &&
-        legacyConfiguration.Version == 18 &&
+        legacyConfiguration.Version == 19 &&
         legacyConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         legacyConfiguration.EnableParsing &&
         legacyConfiguration.AutoStartParser &&
@@ -2498,7 +2503,7 @@ static void ValidateMeterRows()
     };
     Assert(
         parserMigration.ApplyMigrations() &&
-        parserMigration.Version == 18 &&
+        parserMigration.Version == 19 &&
         parserMigration.Meter.DpsMetric == DpsMetric.Rdps &&
         parserMigration.EnableParsing &&
         parserMigration.AutoStartParser,
@@ -2512,7 +2517,7 @@ static void ValidateMeterRows()
         "A post-migration manual parser preference was overwritten.");
     var newConfiguration = new PluginConfiguration();
     Assert(
-        newConfiguration.Version == 18 &&
+        newConfiguration.Version == 19 &&
         newConfiguration.DisabledActPluginIds.Contains("silverdasher") &&
         newConfiguration.Meter.DpsMetric == DpsMetric.Rdps &&
         newConfiguration.EnableParsing &&
@@ -2551,7 +2556,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousHorizontalUser.ApplyMigrations() &&
-        previousHorizontalUser.Version == 18 &&
+        previousHorizontalUser.Version == 19 &&
         !previousHorizontalUser.Meter.ClassicWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsEnabled &&
         previousHorizontalUser.Meter.HorizontalWindow.IsLocked &&
@@ -2576,7 +2581,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousCompositeIdentityUser.ApplyMigrations() &&
-        previousCompositeIdentityUser.Version == 18 &&
+        previousCompositeIdentityUser.Version == 19 &&
         previousCompositeIdentityUser.Meter.ActiveWindowKind == MeterWindowKind.Classic &&
         previousCompositeIdentityUser.Meter.ClassicWindow.IsEnabled &&
         !previousCompositeIdentityUser.Meter.HorizontalWindow.IsEnabled &&
@@ -2605,7 +2610,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousOpacityUser.ApplyMigrations() &&
-        previousOpacityUser.Version == 18 &&
+        previousOpacityUser.Version == 19 &&
         Math.Abs(previousOpacityUser.Meter.ClassicWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         Math.Abs(previousOpacityUser.Meter.RoleSplitWindow.BackgroundOpacity - 0.42f) < 0.0001f &&
         previousOpacityUser.Meter.RoleSplitDamageCompact &&
@@ -2637,7 +2642,7 @@ static void ValidateMeterRows()
     ];
     Assert(
         previousSharedRoleUser.ApplyMigrations() &&
-        previousSharedRoleUser.Version == 18 &&
+        previousSharedRoleUser.Version == 19 &&
         previousSharedRoleUser.Meter.RoleSplitDamageSlots.Select(static slot =>
             (slot.Metric, slot.Visible)).SequenceEqual(
                 previousSharedRoleUser.Meter.RoleSplitHealerSlots.Select(static slot =>
@@ -2672,7 +2677,7 @@ static void ValidateMeterRows()
     previousSharedRoleAppearance.Meter.RoleSplitWindow.SortMode = MeterSortMode.Hps;
     Assert(
         previousSharedRoleAppearance.ApplyMigrations() &&
-        previousSharedRoleAppearance.Version == 18 &&
+        previousSharedRoleAppearance.Version == 19 &&
         previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsEnabled &&
         previousSharedRoleAppearance.Meter.RoleSplitHealerWindow.IsEnabled &&
         previousSharedRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
@@ -2702,7 +2707,7 @@ static void ValidateMeterRows()
         Newtonsoft.Json.JsonConvert.SerializeObject(previousSharedRoleAppearance));
     Assert(
         restoredRoleAppearance is not null &&
-        restoredRoleAppearance.Version == 18 &&
+        restoredRoleAppearance.Version == 19 &&
         restoredRoleAppearance.Meter.RoleSplitDamageWindow.IsLocked &&
         !restoredRoleAppearance.Meter.RoleSplitHealerWindow.IsLocked &&
         !restoredRoleAppearance.Meter.RoleSplitDamageWindow.ShowHeader &&
@@ -2765,7 +2770,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousDebugConfiguration.ApplyMigrations() &&
-        previousDebugConfiguration.Version == 18 &&
+        previousDebugConfiguration.Version == 19 &&
         previousDebugConfiguration.DebugMode &&
         !previousDebugConfiguration.EnableFflogsParityRecorder,
         "The version-9 migration did not detach ordinary Debug from parity recording.");
@@ -2777,7 +2782,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV6Configuration.ApplyMigrations() &&
-        previousV6Configuration.Version == 18 &&
+        previousV6Configuration.Version == 19 &&
         previousV6Configuration.DisabledActPluginIds.Contains("silverdasher"),
         "The first bundled SilverDasher release did not migrate existing users to the disabled default.");
     previousV6Configuration.DisabledActPluginIds.Remove("silverdasher");
@@ -2816,7 +2821,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousGenericPluginUser.ApplyMigrations() &&
-        previousGenericPluginUser.Version == 18 &&
+        previousGenericPluginUser.Version == 19 &&
         previousGenericPluginUser.DisabledActPluginIds.Contains("community.plugin") &&
         previousGenericPluginUser.TrustedGenericActPluginIds.Count == 0,
         "A pre-consent generic plugin was allowed to remain active during configuration migration.");
@@ -2828,7 +2833,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousEdpsUser.ApplyMigrations() &&
-        previousEdpsUser.Version == 18 &&
+        previousEdpsUser.Version == 19 &&
         previousEdpsUser.Meter.DpsMetric == DpsMetric.Rdps,
         "The one-time eDPS-to-rDPS migration was not applied.");
     previousEdpsUser.Meter.DpsMetric = DpsMetric.ExtDps;
@@ -2844,7 +2849,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousCustomMetricUser.ApplyMigrations() &&
-        previousCustomMetricUser.Version == 18 &&
+        previousCustomMetricUser.Version == 19 &&
         previousCustomMetricUser.Meter.DpsMetric == DpsMetric.Dps,
         "The rDPS migration overwrote a previously customized DPS metric.");
 
@@ -2873,7 +2878,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousTimelineUser.ApplyMigrations() &&
-        previousTimelineUser.Version == 18 &&
+        previousTimelineUser.Version == 19 &&
         previousTimelineUser.SelectedCactbotOverlay ==
             SelfHostedActRuntime.CactbotTimelineOverlayName &&
         previousTimelineUser.SelectedOverlayTemplate == "Kagerou" &&
@@ -2962,7 +2967,7 @@ static void ValidateMeterRows()
     };
     Assert(
         previousV5CactbotUser.ApplyMigrations() &&
-        previousV5CactbotUser.Version == 18 &&
+        previousV5CactbotUser.Version == 19 &&
         previousV5CactbotUser.GetOverlayWindowSettings(
             SelfHostedActRuntime.CactbotOverlayName).HasBeenOpened &&
         !previousV5CactbotUser.GetOverlayWindowSettings(

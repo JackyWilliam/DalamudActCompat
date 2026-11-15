@@ -13,6 +13,11 @@ internal static class FflogsPhases
         // The Ice Veil / crystals intermission stays in P2. P4 brings back Usurper of Frost
         // (12809) beside Oracle of Darkness (9832); 13700 is the pair's shared name.
         [1238] = [[12809], [9832], [12809, 13700], [13561]],
+        // The Weapon's Refrain (Ultimate): P1 Garuda, P2 Ifrit, P3 Titan, P4 Lahabrea, P5 The
+        // Ultima Weapon. Counting main-boss changes read P5 by Titan: Garuda's sisters and plumes
+        // and Ifrit's nails each took over as the largest target while the primal was away. The
+        // game has several name rows for these primals, so every row with the name is listed.
+        [777] = [[1185, 9288], [1801, 8350], [2143, 11444], [2137]],
     };
 
     internal static bool Covers(uint territory) => Starts.ContainsKey(territory);
