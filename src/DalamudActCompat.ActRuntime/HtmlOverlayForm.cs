@@ -1458,20 +1458,30 @@ internal sealed class HtmlOverlayForm : IDisposable
                          unchecked((int)0x8007139F),
             });
 
+    private const string LoaderFileName = "WebView2Loader.dll";
+
     internal static string DescribeWebViewInitializationFailure(Exception exception)
     {
-        if (ExceptionChainAny(
-                exception,
-                static candidate => candidate is FileNotFoundException))
-        {
-            return "插件随包的 WebView2Loader.dll 缺失，请重新安装插件";
-        }
-
+        // WebView2 reports a missing Runtime as WebView2RuntimeNotFoundException wrapping the
+        // FileNotFoundException that COM interop builds from ERROR_FILE_NOT_FOUND. Matching any
+        // FileNotFoundException in the chain therefore told players without a Runtime that the
+        // packaged loader was missing, and reinstalling the plugin could never fix that.
         if (ExceptionChainAny(
                 exception,
                 static candidate => candidate is WebView2RuntimeNotFoundException))
         {
-            return "未检测到 Microsoft Edge WebView2 Runtime";
+            return "未检测到 Microsoft Edge WebView2 Runtime，" +
+                   "请安装微软官方的 WebView2 Runtime 后重新打开窗口";
+        }
+
+        // Only this form's own pre-check names the loader file. A FileNotFoundException without
+        // that file name comes from WebView2 itself and says nothing about the plugin package.
+        if (ExceptionChainAny(
+                exception,
+                static candidate => candidate is FileNotFoundException { FileName: { } fileName } &&
+                    fileName.EndsWith(LoaderFileName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return "插件随包的 WebView2Loader.dll 缺失，请重新安装插件";
         }
 
         if (ExceptionChainAny(

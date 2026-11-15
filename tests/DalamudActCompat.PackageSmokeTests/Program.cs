@@ -150,6 +150,11 @@ try
         CrowdedEncounterSmokeTests.Run();
         return 0;
     }
+    if (args.Contains("--html-overlay-defaults-only", StringComparer.Ordinal))
+    {
+        ValidateHtmlOverlayDefaults();
+        return 0;
+    }
     if (args.Contains("--horizontal-meter-native-only", StringComparer.Ordinal))
     {
         HorizontalMeterLayoutSmokeTests.Run();
@@ -11269,10 +11274,47 @@ static void ValidateHtmlOverlayDefaults()
                                      BindingFlags.Static | BindingFlags.NonPublic)
                                  ?? throw new InvalidOperationException(
                                      "WebView2 initialization failure classifier was not found.");
+    // WebView2 raises a missing Runtime as WebView2RuntimeNotFoundException wrapping a
+    // FileNotFoundException; that inner exception used to be mistaken for a missing packaged loader.
+    var runtimeNotFoundType = formType.Assembly.GetReferencedAssemblies()
+                                  .Where(name => name.Name == "Microsoft.Web.WebView2.Core")
+                                  .Select(name => Assembly.Load(name))
+                                  .Select(assembly => assembly.GetType(
+                                      "Microsoft.Web.WebView2.Core.WebView2RuntimeNotFoundException"))
+                                  .FirstOrDefault()
+                              ?? throw new InvalidOperationException(
+                                  "WebView2RuntimeNotFoundException was not found.");
+    var runtimeNotFound = (Exception)Activator.CreateInstance(
+        runtimeNotFoundType,
+        [System.Runtime.InteropServices.Marshal.GetExceptionForHR(unchecked((int)0x80070002))])!;
+    Assert(
+        runtimeNotFound.InnerException is FileNotFoundException,
+        "The WebView2 Runtime-missing fixture no longer wraps a FileNotFoundException.");
+    var runtimeNotFoundMessage = describeWebViewFailure.Invoke(null, [runtimeNotFound]) as string;
+    Assert(
+        runtimeNotFoundMessage?.Contains("WebView2 Runtime", StringComparison.Ordinal) == true &&
+        runtimeNotFoundMessage.Contains("安装", StringComparison.Ordinal) &&
+        !runtimeNotFoundMessage.Contains("WebView2Loader.dll", StringComparison.Ordinal),
+        "A missing WebView2 Runtime is reported as a missing packaged WebView2Loader.dll.");
+    Assert(
+        (describeWebViewFailure.Invoke(
+             null,
+             [new InvalidOperationException("wrapped", runtimeNotFound)]) as string) ==
+        runtimeNotFoundMessage,
+        "A wrapped WebView2 Runtime-missing failure is not classified as Runtime-missing.");
     Assert(
         (describeWebViewFailure.Invoke(
              null,
              [new FileNotFoundException("missing")]) as string)?.Contains(
+            "WebView2Loader.dll",
+            StringComparison.Ordinal) == false,
+        "A FileNotFoundException that does not name the loader is blamed on the packaged loader.");
+    Assert(
+        (describeWebViewFailure.Invoke(
+             null,
+             [new FileNotFoundException(
+                 "missing",
+                 Path.Combine(AppContext.BaseDirectory, "WebView2Loader.dll"))]) as string)?.Contains(
             "WebView2Loader.dll",
             StringComparison.Ordinal) == true &&
         (describeWebViewFailure.Invoke(
