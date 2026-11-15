@@ -74,6 +74,15 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly object statisticsLifecycleLock = new();
     private readonly Func<IReadOnlyList<ActPlayerIdentity>> observedPlayerIdentities;
     private IReadOnlyList<ActPlayerIdentity> observedPlayerSnapshot = [];
+    private ObservedPlayerCache? observedPlayerCache;
+    // A live snapshot walks every combatant of the encounter, and a 48-player duty produces
+    // several hundred combat actions per second. Rebuilding one per action kept the parser
+    // thread inside the locks the game's frame thread takes every frame; alliance raids and
+    // crowded field operations fell to a few frames per second. Both fields are guarded by
+    // encounterSync.
+    private static readonly TimeSpan LivePublishInterval = TimeSpan.FromMilliseconds(100);
+    private DateTimeOffset nextLivePublishAt;
+    private bool livePublishPending;
     private readonly Dictionary<string, ActPlayerIdentity> parsedPlayerIdentities = new(StringComparer.OrdinalIgnoreCase);
     private readonly CachedDalamudGameStateProvider gameStateProvider = new();
     private readonly object encounterSync = new();
@@ -2192,6 +2201,15 @@ public sealed class SelfHostedActRuntime : IDisposable
                 transitionEncounterToPublish = activeEncounter;
                 transitionStateDirty = false;
             }
+
+            // Actions that arrived inside the coalescing window are normally published by the
+            // next action. When none follows, this frame delivers them; waiting a second
+            // interval leaves the work to the parser thread for as long as combat continues.
+            if (livePublishPending && activeEncounter is not null &&
+                now >= nextLivePublishAt + LivePublishInterval)
+            {
+                transitionEncounterToPublish = activeEncounter;
+            }
         }
 
         if (activeChatEncounter is not null)
@@ -2417,7 +2435,7 @@ public sealed class SelfHostedActRuntime : IDisposable
 
             // Healing remains visible in ACT totals, but it must never create or extend
             // the damage window used by DPS/rDPS and FFLogs estimates.
-            PublishEncounter(encounter, false);
+            PublishLiveEncounter(encounter);
             return;
         }
 
@@ -2431,6 +2449,23 @@ public sealed class SelfHostedActRuntime : IDisposable
             statisticsResetTimer.ObserveActivity();
         }
 
+        PublishLiveEncounter(encounter);
+    }
+
+    private void PublishLiveEncounter(EncounterData encounter)
+    {
+        lock (encounterSync)
+        {
+            // The first action of an encounter always publishes: it creates the encounter
+            // state and tells the extension Host that combat began. Later actions inside the
+            // window only mark the snapshot stale; ACT's own totals already include them.
+            if (ReferenceEquals(activeEncounter, encounter) && eventClock.Now < nextLivePublishAt)
+            {
+                livePublishPending = true;
+                return;
+            }
+        }
+
         PublishEncounter(encounter, false);
     }
 
@@ -2438,16 +2473,23 @@ public sealed class SelfHostedActRuntime : IDisposable
     {
         lock (encounterSync)
         {
+            var events = effectiveDamageLedger.GetCommittedEventsSince(
+                effectiveDamageEventCursor,
+                out var nextIndex);
+            effectiveDamageEventCursor = nextIndex;
+            if (events.Count == 0)
+            {
+                // Called for every combat action, and most commit nothing new. Merging the
+                // identity lists first allocated per action for no result.
+                return;
+            }
+
             var knownIdentities = identities
                 .Concat(activeEncounterIdentities.Values)
                 .Concat(parsedPlayerIdentities.Values)
                 .GroupBy(static identity => identity.EntityId)
                 .Select(static group => group.First())
                 .ToArray();
-            var events = effectiveDamageLedger.GetCommittedEventsSince(
-                effectiveDamageEventCursor,
-                out var nextIndex);
-            effectiveDamageEventCursor = nextIndex;
             foreach (var item in events)
             {
                 ActPlayerIdentity? owner = null;
@@ -2604,6 +2646,11 @@ public sealed class SelfHostedActRuntime : IDisposable
                         }
                     }
 
+                    // Every snapshot, whichever thread asked for it, restarts the coalescing
+                    // window and covers the actions that were waiting for one.
+                    livePublishPending = false;
+                    nextLivePublishAt = eventClock.Now + LivePublishInterval;
+
                     var startTime = activeEncounterRelevantStart == default
                         ? encounter.StartTime == DateTime.MaxValue
                             ? eventClock.Now
@@ -2639,8 +2686,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                     }
                     ActCombatantSnapshot ToSnapshot((CombatantData Combatant, ActPlayerIdentity? Identity) item)
                     {
-                        var hitCounts = GetDamageHitCounts(item.Combatant);
-                        var highestDamage = GetHighestDamageHit(item.Combatant);
+                        var hitCounts = GetDamageHitCounts(item.Combatant, out var highestDamage);
                         var displayName = item.Identity?.DisplayName ?? item.Combatant.Name;
                         var actorName = item.Identity?.Name ?? item.Combatant.Name;
                         var effectiveDamage = 0L;
@@ -2797,6 +2843,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                         activeEncounterRelevantStart = default;
                         lastRelevantCombatAction = default;
                         transitionStateDirty = false;
+                        livePublishPending = false;
+                        nextLivePublishAt = default;
                         lastKnownDead.Clear();
                         observedDeaths.Clear();
                         ResetChatEncounterUnsafe();
@@ -3092,9 +3140,23 @@ public sealed class SelfHostedActRuntime : IDisposable
     }
 
     private IReadOnlyList<ActPlayerIdentity> ObservedPlayers()
-        => gameStateProvider.Identities.Concat(Volatile.Read(ref observedPlayerSnapshot))
+    {
+        // Both lists are only replaced by the frame update, while this is asked for on every
+        // combat action. Merge once per replacement instead of once per action.
+        var roster = gameStateProvider.Identities;
+        var nearby = Volatile.Read(ref observedPlayerSnapshot);
+        var cache = Volatile.Read(ref observedPlayerCache);
+        if (cache is not null && ReferenceEquals(cache.Roster, roster) && ReferenceEquals(cache.Nearby, nearby))
+        {
+            return cache.Merged;
+        }
+
+        var merged = roster.Concat(nearby)
             .DistinctBy(identity => identity.EntityId != 0 ? $"id:{identity.EntityId}" : identity.DisplayName,
                 StringComparer.OrdinalIgnoreCase).ToArray();
+        Volatile.Write(ref observedPlayerCache, new ObservedPlayerCache(roster, nearby, merged));
+        return merged;
+    }
 
     private static ParserScopeContext CreateParserContext(IReadOnlyList<ActPlayerIdentity> identities)
         => new(ParserScopePolicy.ResolveEffectiveScope(ParserScope.Auto, identities),
@@ -3103,12 +3165,15 @@ public sealed class SelfHostedActRuntime : IDisposable
 
     internal static IReadOnlyList<(CombatantData Combatant, ActPlayerIdentity Identity)> ResolveParsedPlayers(
         EncounterData encounter, IReadOnlyList<ActPlayerIdentity> observedPlayers)
+    {
         // Only identities supplied by actual player-character objects qualify.
         // Friendly NPCs and pets can have jobs or belong to ACT's ally graph.
-        => encounter.Items.Values.Select(combatant =>
-                (Combatant: combatant, Identity: ActPlayerIdentityResolver.Resolve(observedPlayers, combatant.Name)))
+        var lookup = new ActPlayerIdentityResolver.Lookup(observedPlayers);
+        return encounter.Items.Values.Select(combatant =>
+                (Combatant: combatant, Identity: lookup.Resolve(combatant.Name)))
             .Where(item => item.Identity is not null)
             .Select(item => (item.Combatant, item.Identity!)).ToArray();
+    }
 
     internal static IReadOnlyList<(CombatantData Combatant, ActPlayerIdentity? Identity)>
         ResolveEncounterCombatants(
@@ -3181,11 +3246,12 @@ public sealed class SelfHostedActRuntime : IDisposable
            (left.EntityId != 0 && left.EntityId == right.EntityId) ||
            string.Equals(left.DisplayName, right.DisplayName, StringComparison.OrdinalIgnoreCase);
 
-    private CombatantHitCounts GetDamageHitCounts(CombatantData combatant)
+    private CombatantHitCounts GetDamageHitCounts(CombatantData combatant, out HighestDamageHit highestDamage)
     {
         var allDamage = GetAllOutgoingDamage(combatant);
         if (allDamage is null)
         {
+            highestDamage = new HighestDamageHit(string.Empty, 0);
             return new CombatantHitCounts(
                 Math.Max(0, combatant.Hits),
                 Math.Max(0, combatant.CritHits),
@@ -3214,10 +3280,21 @@ public sealed class SelfHostedActRuntime : IDisposable
             {
                 counter.CriticalDirectHits++;
             }
+
+            // Same rule as GetHighestDamageHit (the first of equal hits wins), continued from
+            // the swings already seen. Rescanning every combatant's whole history for each
+            // snapshot made a long fight slower the longer it ran.
+            var damage = (long)swing.Damage;
+            if (damage > counter.HighestDamage)
+            {
+                counter.HighestDamage = damage;
+                counter.HighestDamageAction = swing.AttackType ?? string.Empty;
+            }
         }
 
         counter.ProcessedSwings = itemCount;
         damageHitCounters[combatant.Name] = counter;
+        highestDamage = new HighestDamageHit(counter.HighestDamageAction, counter.HighestDamage);
 
         return new CombatantHitCounts(
             Math.Max(0, combatant.Hits),
@@ -3308,7 +3385,16 @@ public sealed class SelfHostedActRuntime : IDisposable
         public int DirectHits { get; set; }
 
         public int CriticalDirectHits { get; set; }
+
+        public long HighestDamage { get; set; }
+
+        public string HighestDamageAction { get; set; } = string.Empty;
     }
+
+    private sealed record ObservedPlayerCache(
+        IReadOnlyList<ActPlayerIdentity> Roster,
+        IReadOnlyList<ActPlayerIdentity> Nearby,
+        IReadOnlyList<ActPlayerIdentity> Merged);
 
     private sealed record ParityCompletionRequest(
         Guid EncounterId,

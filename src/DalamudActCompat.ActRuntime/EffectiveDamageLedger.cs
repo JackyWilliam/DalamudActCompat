@@ -14,6 +14,9 @@ internal sealed class EffectiveDamageLedger
     private readonly object syncRoot = new();
     private readonly Func<string, string, bool>? includeCombatEvent;
     private readonly HashSet<string> partyActorIds = new(StringComparer.OrdinalIgnoreCase);
+    // The same players as partyActorIds, by number. Every combat action passes the whole list
+    // of nearby players again; this tells which of them still need their ID formatted.
+    private readonly HashSet<uint> partyEntityIds = [];
     private readonly Dictionary<string, string> ownerIdsByActorId =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<ActionTargetKey, Queue<PendingActionDamage>> pendingActions = [];
@@ -48,6 +51,7 @@ internal sealed class EffectiveDamageLedger
             ownerHealing.Clear();
             committedEvents.Clear();
             partyActorIds.Clear();
+            partyEntityIds.Clear();
             UpdatePartyActorsUnsafe(identities);
             encounterActive = true;
             foreach (var buffered in preEncounterRawLines)
@@ -88,6 +92,7 @@ internal sealed class EffectiveDamageLedger
         {
             encounterActive = false;
             partyActorIds.Clear();
+            partyEntityIds.Clear();
             ownerIdsByActorId.Clear();
             pendingActions.Clear();
             pendingPeriodicEffects.Clear();
@@ -590,7 +595,7 @@ internal sealed class EffectiveDamageLedger
     {
         foreach (var identity in identities)
         {
-            if (identity.EntityId == 0)
+            if (identity.EntityId == 0 || !partyEntityIds.Add(identity.EntityId))
             {
                 continue;
             }
