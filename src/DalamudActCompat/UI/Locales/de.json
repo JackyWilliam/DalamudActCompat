@@ -896,6 +896,8 @@
   "Session expires {0:yyyy-MM-dd HH:mm}": "Sitzung läuft ab {0:yyyy-MM-dd HH:mm}",
   "Set note…": "Notiz hinzufügen…",
   "Sets each player's width in the horizontal carousel.": "Legt die Breite jedes Spielers im horizontalen Karussell fest.",
+  "Shrink modules to fit the window": "Module an das Fenster anpassen",
+  "When the window cannot hold everyone, each player's module narrows evenly until all fit, never wider than the module width above. Below a readable width the row scrolls instead.": "Wenn das Fenster nicht alle Spieler fasst, werden die Module gleichmäßig schmaler, bis alle hineinpassen – nie breiter als die oben eingestellte Modulbreite. Unterhalb einer lesbaren Breite wird die Reihe stattdessen gescrollt.",
   "Settings": "Einstellungen",
   "Settings & Account": "Konto & Einstellungen",
   "Settings & Account / Appearance & skins": "Konto & Einstellungen / Designs",

@@ -475,6 +475,14 @@ public sealed partial class MeterStyleEditorWindow
                 profile.ItemWidth = itemWidth;
                 changed = true;
             }
+            var fitItems = profile.FitItemsToWindow;
+            if (DactUi.ToggleRow(text.Get("窗口放不下时收窄模块", "Shrink modules to fit the window"), ref fitItems,
+                    text.Get("窗口放不下所有玩家时，把每名玩家的模块平均收窄到刚好放下，最宽不超过上面设置的模块宽度；窄到看不清时仍然左右滑动。",
+                        "When the window cannot hold everyone, each player's module narrows evenly until all fit, never wider than the module width above. Below a readable width the row scrolls instead.")))
+            {
+                profile.FitItemsToWindow = fitItems;
+                changed = true;
+            }
         }
 
         var background = profile.BackgroundColor ?? MeterBackground.DefaultColor;

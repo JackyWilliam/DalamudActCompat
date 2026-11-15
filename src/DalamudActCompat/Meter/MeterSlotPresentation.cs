@@ -240,7 +240,9 @@ internal static class MeterSlotPresentation
         UiText text,
         Vector4 labelColor,
         Vector4 valueColor,
-        MeterPreviewInteraction? previewInteraction = null)
+        MeterPreviewInteraction? previewInteraction = null,
+        float? maximumCellWidth = null,
+        float cellSpacing = 0)
     {
         var summaries = slots.Where(static slot =>
                 slot.Visible &&
@@ -261,13 +263,13 @@ internal static class MeterSlotPresentation
             start,
             start + new Vector2(width, 0),
             ImGui.GetColorU32(new Vector4(labelColor.X, labelColor.Y, labelColor.Z, 0.45f)));
-        var cellWidth = width / summaries.Length;
+        var (cellWidth, cellStride) = ResolveTeamSummaryCells(width, summaries.Length, maximumCellWidth, cellSpacing);
         for (var index = 0; index < summaries.Length; index++)
         {
             var metric = summaries[index].Metric;
             var label = Label(metric, text);
             var value = TeamSummaryValue(metric, encounter);
-            var cellStart = start + new Vector2(index * cellWidth, 8);
+            var cellStart = start + new Vector2(index * cellStride, 8);
             var valueSize = ImGui.CalcTextSize(value);
             var labelWidth = cellWidth - valueSize.X - 14;
             var visibleLabel = labelWidth > ImGui.GetFontSize() ? TrimToWidth(label, labelWidth) : "";
@@ -286,6 +288,28 @@ internal static class MeterSlotPresentation
                 new Vector2(cellStart.X + cellWidth, start.Y + TeamSummaryHeight),
                 drawList);
         }
+    }
+
+    /// <summary>
+    /// The width of one team total and the distance between two. Without a maximum the totals
+    /// split the whole row, as the vertical meters do. With one (the horizontal meter) each stays
+    /// at most that wide and they sit side by side from the left, spaced like the player modules
+    /// above; a window too narrow for that falls back to sharing what there is.
+    /// </summary>
+    internal static (float Width, float Stride) ResolveTeamSummaryCells(
+        float rowWidth,
+        int count,
+        float? maximumCellWidth,
+        float cellSpacing)
+    {
+        if (maximumCellWidth is not { } maximum || count <= 0)
+        {
+            var share = rowWidth / Math.Max(1, count);
+            return (share, share);
+        }
+
+        var width = Math.Max(1, Math.Min(maximum, (rowWidth - (cellSpacing * (count - 1))) / count));
+        return (width, width + cellSpacing);
     }
 
     public static string TrimToWidth(string value, float maximumWidth)

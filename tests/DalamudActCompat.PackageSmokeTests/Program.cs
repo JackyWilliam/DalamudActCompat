@@ -145,6 +145,17 @@ try
         MeterScrollbarNativeSmokeTests.Run();
         return 0;
     }
+    if (args.Contains("--crowded-encounter-only", StringComparer.Ordinal))
+    {
+        CrowdedEncounterSmokeTests.Run();
+        return 0;
+    }
+    if (args.Contains("--horizontal-meter-native-only", StringComparer.Ordinal))
+    {
+        HorizontalMeterLayoutSmokeTests.Run();
+        HorizontalMeterLayoutSmokeTests.RunNative();
+        return 0;
+    }
     if (args.Contains("--ban-recovery-only", StringComparer.Ordinal))
     {
         await CloudBanRecoverySmokeTests.RunAsync(testRoot);
@@ -238,6 +249,8 @@ try
     MeterDisplayScopeSmokeTests.Run(args.Contains("--meter-display-scope-only", StringComparer.Ordinal) &&
         Environment.GetEnvironmentVariable("DACT_TEST_CIMGUI") is { Length: > 0 });
     if (args.Contains("--meter-display-scope-only", StringComparer.Ordinal)) return 0;
+    CrowdedEncounterSmokeTests.Run();
+    HorizontalMeterLayoutSmokeTests.Run();
     AiAssistantSmokeTests.Run(testRoot);
     CombatAutoHideSmokeTests.Run();
     EnglishLocalizationSmokeTests.Run();

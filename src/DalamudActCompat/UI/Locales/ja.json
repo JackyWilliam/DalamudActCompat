@@ -896,6 +896,8 @@
   "Session expires {0:yyyy-MM-dd HH:mm}": "セッションの有効期限が切れます {0:yyyy-MM-dd HH:mm}",
   "Set note…": "メモを設定…",
   "Sets each player's width in the horizontal carousel.": "水平カルーセル内の各プレーヤーの幅を設定します。",
+  "Shrink modules to fit the window": "ウィンドウに収まるようモジュールを縮小",
+  "When the window cannot hold everyone, each player's module narrows evenly until all fit, never wider than the module width above. Below a readable width the row scrolls instead.": "ウィンドウに全員が収まらない場合、各プレーヤーのモジュールを均等に縮めて全員を表示します。上で設定したモジュール幅より広くはなりません。読めない幅になる場合は、これまでどおり左右にスクロールします。",
   "Settings": "設定",
   "Settings & Account": "設定・アカウント",
   "Settings & Account / Appearance & skins": "設定・アカウント / 外観・スキン",

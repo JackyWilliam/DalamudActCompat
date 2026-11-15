@@ -86,6 +86,10 @@ public sealed class MeterWindowProfile
 
     public float ItemWidth { get; set; } = 210;
 
+    // Horizontal meter only. Off keeps every player at ItemWidth and scrolls whoever does not
+    // fit, which is what every layout saved before 1.0.0.9 expects.
+    public bool FitItemsToWindow { get; set; }
+
     public MeterSortMode SortMode { get; set; } = MeterSortMode.Dps;
 
     public DpsMetric DpsSortMetric { get; set; } = DpsMetric.Dps;
