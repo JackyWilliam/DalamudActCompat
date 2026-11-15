@@ -150,6 +150,16 @@ try
         CrowdedEncounterSmokeTests.Run();
         return 0;
     }
+    if (args.Contains("--html-overlay-defaults-only", StringComparer.Ordinal))
+    {
+        ValidateHtmlOverlayDefaults();
+        return 0;
+    }
+    if (args.Contains("--diagnostic-report-only", StringComparer.Ordinal))
+    {
+        ValidateDiagnosticReport(testRoot);
+        return 0;
+    }
     if (args.Contains("--horizontal-meter-native-only", StringComparer.Ordinal))
     {
         HorizontalMeterLayoutSmokeTests.Run();
@@ -6227,8 +6237,12 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         pending.Any(plugin =>
             plugin.Id == "postnamazu" &&
             plugin.Author == "Natsukage" &&
-            plugin.DownloadUrl.Contains("/releases/download/", StringComparison.Ordinal)),
-        "PostNamazu author or DLL URL disclosure is incomplete.");
+            // Bundled as a build of upstream master, so the disclosure names the exact source
+            // commit instead of a release asset (tools/build-postnamazu-snapshot.ps1).
+            System.Text.RegularExpressions.Regex.IsMatch(
+                plugin.DownloadUrl,
+                "^https://github\\.com/Natsukage/PostNamazu/tree/[0-9a-f]{40}$")),
+        "PostNamazu author or source commit disclosure is incomplete.");
     Assert(
         pending.Any(plugin =>
             plugin.Id == "silverdasher" &&
@@ -6351,8 +6365,16 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         var check = await updateChecker.CheckAsync(
             manager.Plugins,
             CancellationToken.None);
+        // Triggernometry and FoxTTS follow their authors' downloads. PostNamazu, Matcha and
+        // SilverDasher are pinned builds: the bundled PostNamazu is built from upstream master
+        // and the official release with the same version number must not replace it.
+        var onlineUpdatable = manager.Plugins.Where(plugin => !plugin.DisableOnlineUpdates)
+            .Select(plugin => plugin.Id).Order(StringComparer.Ordinal).ToArray();
         Assert(
-            check.Failures.Count == 0 && check.Updates.Count == 3,
+            onlineUpdatable.SequenceEqual(["act.foxtts", "triggernometry"]),
+            $"Unexpected set of online-updatable bundled plugins: {string.Join(", ", onlineUpdatable)}.");
+        Assert(
+            check.Failures.Count == 0 && check.Updates.Count == onlineUpdatable.Length,
             "Runtime author-source checking did not find all simulated DLL updates.");
         Assert(
             check.Updates.All(plugin =>
@@ -6361,11 +6383,11 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
                 File.Exists(plugin.AssemblyPath)),
             "Runtime DLL update candidates were not cached with disclosure URLs.");
         Assert(
-            manager.ApplyOnlineUpdates(check.Updates) == 3,
+            manager.ApplyOnlineUpdates(check.Updates) == onlineUpdatable.Length,
             "Runtime DLL update candidates were not applied to the disclosure gate.");
         var onlinePending = manager.GetPendingDisclosures();
         Assert(
-            onlinePending.Count == 3 &&
+            onlinePending.Count == onlineUpdatable.Length &&
             onlinePending.All(plugin => plugin.IsOnlineUpdate),
             "Online DLL updates did not require a new disclosure.");
         var onlineUpdateIds = check.Updates
@@ -6382,7 +6404,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             CancellationToken.None);
         Assert(
             manager.GetPendingDisclosures().Count == 0 &&
-            configuration.BundledPluginUpdateRecords.Count == 3,
+            configuration.BundledPluginUpdateRecords.Count == onlineUpdatable.Length,
             "Online DLL updates were not installed, acknowledged, and persisted.");
     }
 
@@ -8445,6 +8467,32 @@ static void ValidateFfxivEntityDeltaBuilder()
             [player.Id, spawned.Id]) &&
         changedDelta.RemovedIds.Count == 0,
         "Position changes or newly spawned entities were omitted from the incremental update.");
+    // Statuses are most of an actor's size. One that only moved goes out without them and is
+    // named for the Host to keep what it has; a new actor has nothing to keep and goes whole.
+    Assert(
+        changedDelta.KeepStatusIds is { Count: 1 } kept && kept[0] == player.Id &&
+        changedDelta.Upserts.Single(combatant => combatant.Id == player.Id) is { PosX: 4, Statuses.Count: 0 } &&
+        changedDelta.Upserts.Single(combatant => combatant.Id == spawned.Id).Statuses.Count == 1,
+        "A moved actor still carried its unchanged statuses, or a new actor lost its own.");
+    var restatused = moved with { Statuses = [.. player.Statuses, new HostFfxivStatus(2000, 0, 15, 0x40000002)] };
+    var bare = spawned with { Statuses = [] };
+    var statusDelta = FfxivEntitySnapshotBuilder.BuildDelta(
+        new HostFfxivEntitySnapshot(1, player.Id, baselineAt, [player, bare]),
+        new HostFfxivEntitySnapshot(1, player.Id, baselineAt.AddMilliseconds(60), [restatused, bare with { PosX = 9 }]));
+    Assert(
+        statusDelta.KeepStatusIds is null &&
+        statusDelta.Upserts.Single(combatant => combatant.Id == player.Id).Statuses.Count == 2 &&
+        statusDelta.Upserts.Single(combatant => combatant.Id == bare.Id).PosX == 9,
+        "A changed status list was withheld, or an actor without statuses was marked as keeping some.");
+    // The list survives the wire, and a payload serialized once is used as it is.
+    var serializedDelta = System.Text.Json.JsonSerializer.SerializeToElement(changedDelta);
+    var envelope = HostEnvelope.Create("session", 1, HostMessageTypes.FfxivEntityDelta, HostMessagePriority.State, serializedDelta);
+    var receivedDelta = System.Text.Json.JsonSerializer.Deserialize<HostFfxivEntityDelta>(envelope.Payload)!;
+    Assert(
+        envelope.Payload.GetRawText() == serializedDelta.GetRawText() &&
+        receivedDelta.KeepStatusIds is { Count: 1 } received && received[0] == player.Id &&
+        receivedDelta.Upserts.Count == 2,
+        "An entity delta changed between the game and the Host.");
 
     var latestDuplicate = moved with { PosX = 5 };
     var invalidPlaceholder = moved with
@@ -11231,10 +11279,47 @@ static void ValidateHtmlOverlayDefaults()
                                      BindingFlags.Static | BindingFlags.NonPublic)
                                  ?? throw new InvalidOperationException(
                                      "WebView2 initialization failure classifier was not found.");
+    // WebView2 raises a missing Runtime as WebView2RuntimeNotFoundException wrapping a
+    // FileNotFoundException; that inner exception used to be mistaken for a missing packaged loader.
+    var runtimeNotFoundType = formType.Assembly.GetReferencedAssemblies()
+                                  .Where(name => name.Name == "Microsoft.Web.WebView2.Core")
+                                  .Select(name => Assembly.Load(name))
+                                  .Select(assembly => assembly.GetType(
+                                      "Microsoft.Web.WebView2.Core.WebView2RuntimeNotFoundException"))
+                                  .FirstOrDefault()
+                              ?? throw new InvalidOperationException(
+                                  "WebView2RuntimeNotFoundException was not found.");
+    var runtimeNotFound = (Exception)Activator.CreateInstance(
+        runtimeNotFoundType,
+        [System.Runtime.InteropServices.Marshal.GetExceptionForHR(unchecked((int)0x80070002))])!;
+    Assert(
+        runtimeNotFound.InnerException is FileNotFoundException,
+        "The WebView2 Runtime-missing fixture no longer wraps a FileNotFoundException.");
+    var runtimeNotFoundMessage = describeWebViewFailure.Invoke(null, [runtimeNotFound]) as string;
+    Assert(
+        runtimeNotFoundMessage?.Contains("WebView2 Runtime", StringComparison.Ordinal) == true &&
+        runtimeNotFoundMessage.Contains("安装", StringComparison.Ordinal) &&
+        !runtimeNotFoundMessage.Contains("WebView2Loader.dll", StringComparison.Ordinal),
+        "A missing WebView2 Runtime is reported as a missing packaged WebView2Loader.dll.");
+    Assert(
+        (describeWebViewFailure.Invoke(
+             null,
+             [new InvalidOperationException("wrapped", runtimeNotFound)]) as string) ==
+        runtimeNotFoundMessage,
+        "A wrapped WebView2 Runtime-missing failure is not classified as Runtime-missing.");
     Assert(
         (describeWebViewFailure.Invoke(
              null,
              [new FileNotFoundException("missing")]) as string)?.Contains(
+            "WebView2Loader.dll",
+            StringComparison.Ordinal) == false,
+        "A FileNotFoundException that does not name the loader is blamed on the packaged loader.");
+    Assert(
+        (describeWebViewFailure.Invoke(
+             null,
+             [new FileNotFoundException(
+                 "missing",
+                 Path.Combine(AppContext.BaseDirectory, "WebView2Loader.dll"))]) as string)?.Contains(
             "WebView2Loader.dll",
             StringComparison.Ordinal) == true &&
         (describeWebViewFailure.Invoke(
@@ -13180,6 +13265,43 @@ static void ValidateDiagnosticReport(string testRoot)
         selected[0].Contains("failure", StringComparison.Ordinal) &&
         selected[1].Contains("at DalamudActCompat.Test()", StringComparison.Ordinal),
         "The diagnostic log filter did not retain only plugin lines and their exception continuation.");
+
+    // Real Dalamud entries start with a timestamp and the exception follows without one. Its type,
+    // message, inner exception and third-party frames never mention this plugin; a report that
+    // dropped them could not tell a missing WebView2 Runtime from a missing packaged file.
+    string[] timestampedLog =
+    [
+        "2026-11-15 20:32:18.100 +08:00 [ERR] [OtherPlugin] other failure",
+        "System.InvalidOperationException: other private detail",
+        "   at OtherPlugin.Run()",
+        "2026-11-15 20:32:18.353 +08:00 [ERR] [DalamudActCompat] HTML overlay WebView2 initialization failed",
+        "Microsoft.Web.WebView2.Core.WebView2RuntimeNotFoundException: Couldn't find a compatible Webview2 Runtime",
+        " ---> System.IO.FileNotFoundException: The system cannot find the file specified. (0x80070002)",
+        "File name: 'C:\\Users\\Alice\\plugin\\WebView2Loader.dll'",
+        "   --- End of inner exception stack trace ---",
+        "   at Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(String a, String b)",
+        "   at DalamudActCompat.ActRuntime.HtmlOverlayForm.InitializeWebViewAsync()",
+        "2026-11-15 20:32:18.400 +08:00 [INF] [OtherPlugin] next entry",
+        "other continuation without a timestamp",
+        "2026-11-15 20:32:18.500 +08:00 [ERR] [OtherPlugin] callback failed",
+        "System.NullReferenceException: other callback detail",
+        "   at DalamudActCompat.Plugin.OnFrameworkUpdate()",
+        "   at Dalamud.Game.Framework.Update()",
+        "2026-11-15 20:32:18.600 +08:00 [INF] [DalamudActCompat] recovered",
+    ];
+    var timestampedSelection = DiagnosticReportBuilder.SelectRelevantDalamudLines(timestampedLog);
+    Assert(
+        timestampedSelection.SequenceEqual(
+        [
+            timestampedLog[3], timestampedLog[4], timestampedLog[5], timestampedLog[6], timestampedLog[7],
+            timestampedLog[8], timestampedLog[9],
+            // Another plugin's entry: only the frames that name this plugin, as before.
+            timestampedLog[14], timestampedLog[15],
+            timestampedLog[16],
+        ]),
+        "The diagnostic log filter dropped the exception type, message or third-party frames of a " +
+        "plugin entry, or kept lines of another plugin's entry: " +
+        string.Join(" | ", timestampedSelection));
 
     // "复制诊断日志" copies a .txt file: UTF-8 with BOM, ASCII name, only the newest exports kept.
     var exportLogs = Path.Combine(testRoot, "diagnostic-export-logs");

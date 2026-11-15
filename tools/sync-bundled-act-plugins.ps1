@@ -209,19 +209,21 @@ Invoke-WebRequest `
     -Uri "https://raw.githubusercontent.com/Noisyfox/ACT.FoxTTS/master/LICENSE" `
     -OutFile $foxLicense
 
+# PostNamazu is a snapshot DACT built from upstream master with tools/build-postnamazu-snapshot.ps1.
+# Simulant v0.1.0.0 calls the game through PostNamazu's call scheduler, which master has and
+# the latest official release (1.3.6.6) does not. Sync therefore only verifies the audited
+# local build, as it does for Matcha. The day upstream publishes a newer release this fails,
+# so the snapshot is replaced by the official package instead of lingering.
+$postNamazuSnapshotCommit = "521007c86343782c6bc9a52d5e192e520fcf32ca"
+$postNamazuSnapshotSha256 = "4377fc01a08aa76040aa870a95513bff8f1537a746617f8eeee9fe3f5bf835ec"
+$postNamazuOfficialTag = "1.3.6.6"
+$postNamazuDll = Get-Item -LiteralPath (Join-Path $destinationRoot "postnamazu/PostNamazu.dll")
+if ((Get-Sha256 $postNamazuDll.FullName) -ne $postNamazuSnapshotSha256) {
+    throw "The bundled PostNamazu master snapshot no longer matches its fixed hash."
+}
 $postNamazuRelease = Get-LatestReleaseAsset "Natsukage/PostNamazu" "^PostNamazu\.zip$"
-$postNamazuArchive = Join-Path $postNamazuDirectory $postNamazuRelease.Name
-$postNamazuExpanded = Join-Path $postNamazuDirectory "expanded"
-New-Item -ItemType Directory -Force -Path $postNamazuExpanded | Out-Null
-Invoke-WebRequest -Uri $postNamazuRelease.DownloadUrl -OutFile $postNamazuArchive
-Expand-Archive -LiteralPath $postNamazuArchive -DestinationPath $postNamazuExpanded -Force
-$postNamazuDll = Get-ChildItem `
-    -LiteralPath $postNamazuExpanded `
-    -Recurse `
-    -Filter "PostNamazu.dll" |
-    Select-Object -First 1
-if ($null -eq $postNamazuDll) {
-    throw "PostNamazu release does not contain PostNamazu.dll."
+if ($postNamazuRelease.Tag -ne $postNamazuOfficialTag) {
+    throw "PostNamazu published $($postNamazuRelease.Tag); replace the bundled master snapshot with the official release."
 }
 
 $plugins = @(
@@ -265,12 +267,15 @@ $plugins = @(
         maintainer = "Natsukage"
         copyright = ""
         projectUrl = "https://github.com/Natsukage/PostNamazu"
-        downloadUrl = $postNamazuRelease.DownloadUrl
+        downloadUrl = "https://github.com/Natsukage/PostNamazu/tree/$postNamazuSnapshotCommit"
         sourceUrl = "https://github.com/Natsukage/PostNamazu"
-        license = "Redistribution authorized by the author; the upstream repository declares no SPDX license"
+        license = "Built by DACT from upstream master at the commit in downloadUrl (the call scheduler is not in an official release yet); redistribution authorized by the author; the upstream repository declares no SPDX license"
         licenseFile = ""
         relativeAssembly = "postnamazu/PostNamazu.dll"
         sha256 = Get-Sha256 $postNamazuDll.FullName
+        # The official 1.3.6.6 carries the same version number; an online check would see it
+        # as a different build of this version and put the release without the scheduler back.
+        disableOnlineUpdates = $true
         enableAfterInstall = $true
     },
     [ordered]@{
@@ -331,9 +336,6 @@ Copy-Or-Verify `
     $foxLicense `
     (Join-Path $destinationRoot "act.foxtts/LICENSE.txt") `
     -NormalizeText
-Copy-Or-Verify `
-    $postNamazuDll.FullName `
-    (Join-Path $destinationRoot "postnamazu/PostNamazu.dll")
 
 $lockPath = Join-Path $destinationRoot "bundled-plugins.lock.json"
 $lock = [ordered]@{

@@ -13,6 +13,48 @@ public static class SimulantCompatibility
             .Select(plugin => plugin.pluginObj)
             .First(plugin => plugin?.GetType().FullName == "FFXIV_ACT_Plugin.FFXIV_ACT_Plugin");
 
+    // The zone handler of the loaded Simulant (v0.1.0.0 and later), if any. One slot: a
+    // reloaded plugin replaces its predecessor, whose handler ignores calls once disposed.
+    private static Action<uint, string>? zoneChanged;
+
+    /// <summary>
+    /// Stands in for the FFXIV plugin's ZoneChanged subscription, which upstream makes only
+    /// after ACT's status label reads "STARTED". Simulant uses it to drop the addresses of the
+    /// entities it spawned and the party it simulated when the game leaves the zone.
+    /// </summary>
+    public static void ObserveZoneChanges(object pluginHost)
+    {
+        var type = pluginHost.GetType();
+        var handler = type.GetMethod("OnFFXIVZoneChanged", BindingFlags.Instance | BindingFlags.NonPublic)
+                      ?? throw new MissingMethodException(type.FullName, "OnFFXIVZoneChanged");
+        // Upstream records the zone it subscribed in, so the first report of that same zone
+        // does not count as a change.
+        type.GetField("_entityZoneId", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?.SetValue(pluginHost, HostPluginBridge.FfxivRepository.GetCurrentTerritoryID());
+        Volatile.Write(ref zoneChanged, handler.CreateDelegate<Action<uint, string>>(pluginHost));
+    }
+
+    /// <summary>Called by the Host for every zone change the game reports.</summary>
+    internal static void NotifyZoneChanged(uint territoryId, string zoneName)
+    {
+        try
+        {
+            Volatile.Read(ref zoneChanged)?.Invoke(territoryId, zoneName);
+        }
+        catch (Exception error)
+        {
+            // A simulator fault must not break zone handling for the other extensions.
+            Console.Error.WriteLine($"Simulant zone change handler failed: {error}");
+        }
+    }
+
+    /// <summary>
+    /// Where Simulant keeps "Config\Simulant.config.xml". Upstream uses the application folder,
+    /// which in a Host belongs to one DACT version; ACT's data folder survives updates.
+    /// </summary>
+    public static string GetConfigurationRoot()
+        => ActGlobals.oFormActMain.AppDataFolder.FullName;
+
     public static void EnsureNativeAccess()
     {
         // Simulant borrows PostNamazu's native runtime, so both extensions must have their

@@ -15,8 +15,13 @@ internal sealed class FfxivDataRepository : IDataRepository
     private readonly object syncRoot = new();
     private readonly HashSet<uint> seenEntities = [];
     private uint seenTerritoryId;
-    private HostFfxivEntitySnapshot snapshot = new(0, 0, DateTimeOffset.MinValue, []);
-    private Dictionary<uint, HostFfxivCombatant> baselineCombatants = [];
+    private uint territoryId;
+    private uint currentPlayerId;
+    // The last full snapshot, in its order, and the same actors as plugins see them. Deltas
+    // arrive every 30 ms and each is relative to this; mapping only what a delta names keeps
+    // their cost proportional to what changed instead of to everything in the zone.
+    private HostFfxivCombatant[] baselineOrder = [];
+    private Dictionary<uint, Combatant> baselineMapped = [];
     private DateTimeOffset baselineTimestamp = DateTimeOffset.MinValue;
     private DateTimeOffset lastEntityUpdateTimestamp = DateTimeOffset.MinValue;
     // Epoch of the newest applied game-side capture; see HostLogEvent.EntityEpoch.
@@ -79,14 +84,21 @@ internal sealed class FfxivDataRepository : IDataRepository
                 return;
             }
 
-            snapshot = next with { Combatants = nextById.Values.ToArray() };
-            baselineCombatants = nextById;
+            territoryId = next.TerritoryId;
+            currentPlayerId = next.CurrentPlayerId;
+            baselineOrder = nextById.Values.ToArray();
+            var mappedAt = DateTime.Now;
+            baselineMapped = new Dictionary<uint, Combatant>(baselineOrder.Length);
+            foreach (var source in baselineOrder)
+            {
+                baselineMapped[source.Id] = MapCombatant(source, mappedAt);
+            }
             baselineTimestamp = next.Timestamp;
             lastEntityUpdateTimestamp = next.Timestamp;
             // A full snapshot restarts the count, so a reloaded sender that begins again at a
             // low epoch is followed instead of being outranked by its predecessor forever.
             entityEpoch = next.Epoch;
-            combatants = MapCombatants(nextById.Values, next.CurrentPlayerId);
+            combatants = PlayerFirst(baselineOrder.Select(source => baselineMapped[source.Id]), baselineOrder.Length);
             RecordSeenLocked(next.TerritoryId, nextById.Keys);
         }
     }
@@ -128,8 +140,8 @@ internal sealed class FfxivDataRepository : IDataRepository
         {
             if (delta.BaseTimestamp != baselineTimestamp ||
                 delta.Timestamp < lastEntityUpdateTimestamp ||
-                delta.TerritoryId != snapshot.TerritoryId ||
-                delta.CurrentPlayerId != snapshot.CurrentPlayerId)
+                delta.TerritoryId != territoryId ||
+                delta.CurrentPlayerId != currentPlayerId)
             {
                 return false;
             }
@@ -137,28 +149,45 @@ internal sealed class FfxivDataRepository : IDataRepository
             // Every delta is relative to the last full snapshot because state-priority IPC may
             // coalesce intermediate frames. Rebuilding from that baseline makes the newest delta
             // complete even when one or more earlier deltas never crossed the process boundary.
-            var merged = new Dictionary<uint, HostFfxivCombatant>(baselineCombatants);
-            foreach (var removedId in delta.RemovedIds)
-            {
-                merged.Remove(removedId);
-            }
-
+            var keepStatuses = delta.KeepStatusIds is { Count: > 0 } keepIds ? new HashSet<uint>(keepIds) : null;
+            var mappedAt = DateTime.Now;
+            var upserts = new Dictionary<uint, Combatant>(delta.Upserts.Count);
             foreach (var upsert in delta.Upserts)
             {
-                if (IsValidEntityId(upsert.Id))
+                if (!IsValidEntityId(upsert.Id))
                 {
-                    merged[upsert.Id] = upsert;
+                    continue;
                 }
+
+                // The sender left out statuses that equal the baseline's, so the ones mapped
+                // from the baseline are reused. An actor the baseline never had cannot be in
+                // that list; if it is anyway, it keeps the (empty) statuses it was sent with.
+                upserts[upsert.Id] = keepStatuses?.Contains(upsert.Id) == true &&
+                                     baselineMapped.TryGetValue(upsert.Id, out var kept)
+                    ? MapCombatant(upsert, mappedAt, kept.NetworkBuffs)
+                    : MapCombatant(upsert, mappedAt);
             }
 
-            snapshot = new HostFfxivEntitySnapshot(
-                delta.TerritoryId,
-                delta.CurrentPlayerId,
-                delta.Timestamp,
-                merged.Values.ToArray());
+            var removed = delta.RemovedIds.Count == 0 ? null : new HashSet<uint>(delta.RemovedIds);
+            // Baseline order with the changed actors in place, then the actors new since it.
+            // Unchanged actors are the very objects mapped from the baseline.
+            var merged = new List<Combatant>(baselineOrder.Length + upserts.Count);
+            foreach (var source in baselineOrder)
+            {
+                if (upserts.Remove(source.Id, out var changed))
+                {
+                    merged.Add(changed);
+                }
+                else if (removed?.Contains(source.Id) != true)
+                {
+                    merged.Add(baselineMapped[source.Id]);
+                }
+            }
+            merged.AddRange(upserts.Values);
+
             lastEntityUpdateTimestamp = delta.Timestamp;
             entityEpoch = Math.Max(entityEpoch, delta.Epoch);
-            combatants = MapCombatants(merged.Values, delta.CurrentPlayerId);
+            combatants = PlayerFirst(merged, merged.Count);
             RecordSeenLocked(delta.TerritoryId, delta.Upserts.Select(upsert => upsert.Id).Where(IsValidEntityId));
             return true;
         }
@@ -254,7 +283,7 @@ internal sealed class FfxivDataRepository : IDataRepository
     {
         lock (syncRoot)
         {
-            return snapshot.TerritoryId;
+            return territoryId;
         }
     }
 
@@ -262,7 +291,7 @@ internal sealed class FfxivDataRepository : IDataRepository
     {
         lock (syncRoot)
         {
-            return snapshot.CurrentPlayerId;
+            return currentPlayerId;
         }
     }
 
@@ -316,13 +345,30 @@ internal sealed class FfxivDataRepository : IDataRepository
         }
     }
 
-    private static ReadOnlyCollection<Combatant> MapCombatants(
-        IEnumerable<HostFfxivCombatant> sources,
-        uint currentPlayerId)
-        => Array.AsReadOnly(sources
-            .OrderByDescending(combatant => combatant.Id == currentPlayerId)
-            .Select(MapCombatant)
-            .ToArray());
+    // FFXIV_ACT_Plugin lists the local player first and everything else keeps its order. This
+    // used to be a full sort of every actor on every update.
+    private ReadOnlyCollection<Combatant> PlayerFirst(IEnumerable<Combatant> ordered, int count)
+    {
+        var result = new List<Combatant>(count);
+        Combatant? player = null;
+        foreach (var combatant in ordered)
+        {
+            if (player is null && combatant.ID == currentPlayerId)
+            {
+                player = combatant;
+            }
+            else
+            {
+                result.Add(combatant);
+            }
+        }
+
+        if (player is not null)
+        {
+            result.Insert(0, player);
+        }
+        return result.AsReadOnly();
+    }
 
     private static Dictionary<uint, HostFfxivCombatant> BuildCombatantMap(
         IEnumerable<HostFfxivCombatant> sources)
@@ -344,7 +390,10 @@ internal sealed class FfxivDataRepository : IDataRepository
     private static bool IsValidEntityId(uint entityId)
         => entityId is not 0 and not InvalidEntityId;
 
-    private static Combatant MapCombatant(HostFfxivCombatant source)
+    private static Combatant MapCombatant(
+        HostFfxivCombatant source,
+        DateTime mappedAt,
+        NetworkBuff[]? keptBuffs = null)
         => new()
         {
             ID = source.Id,
@@ -388,11 +437,11 @@ internal sealed class FfxivDataRepository : IDataRepository
                 _ => PartyType.None,
             },
             Address = new IntPtr(source.Address),
-            NetworkBuffs = source.Statuses.Select(status => new NetworkBuff
+            NetworkBuffs = keptBuffs ?? source.Statuses.Select(status => new NetworkBuff
             {
                 BuffID = status.Id,
                 BuffExtra = status.Param,
-                Timestamp = DateTime.Now,
+                Timestamp = mappedAt,
                 Duration = Math.Max(0, status.RemainingTime),
                 ActorID = status.SourceId,
                 ActorName = string.Empty,
