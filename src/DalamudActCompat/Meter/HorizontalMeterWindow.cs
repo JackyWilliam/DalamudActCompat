@@ -510,10 +510,12 @@ public sealed class HorizontalMeterWindow : Window
                         if (labelWidth < ImGui.GetFontSize()) labelWidth = 0;
                     }
                     if (labelWidth > 0)
-                    MeterBackground.AddText(drawList,
-                        slotStart + new Vector2(0, 3),
-                        ImGui.GetColorU32(MeterBackground.Foreground(Muted)),
-                        MeterSlotPresentation.TrimToWidth(label, labelWidth));
+                    {
+                        MeterBackground.AddText(drawList,
+                            slotStart + new Vector2(0, 3),
+                            ImGui.GetColorU32(MeterBackground.Foreground(Muted)),
+                            MeterSlotPresentation.TrimToWidth(label, labelWidth));
+                    }
                     MeterBackground.AddText(drawList,
                         slotStart + new Vector2(labelWidth, 3),
                         ImGui.GetColorU32(MeterBackground.Foreground(PrimaryColor(placement.Slot.Metric, row.IsLocalPlayer))),
