@@ -155,6 +155,11 @@ try
         ValidateHtmlOverlayDefaults();
         return 0;
     }
+    if (args.Contains("--diagnostic-report-only", StringComparer.Ordinal))
+    {
+        ValidateDiagnosticReport(testRoot);
+        return 0;
+    }
     if (args.Contains("--horizontal-meter-native-only", StringComparer.Ordinal))
     {
         HorizontalMeterLayoutSmokeTests.Run();
@@ -13260,6 +13265,43 @@ static void ValidateDiagnosticReport(string testRoot)
         selected[0].Contains("failure", StringComparison.Ordinal) &&
         selected[1].Contains("at DalamudActCompat.Test()", StringComparison.Ordinal),
         "The diagnostic log filter did not retain only plugin lines and their exception continuation.");
+
+    // Real Dalamud entries start with a timestamp and the exception follows without one. Its type,
+    // message, inner exception and third-party frames never mention this plugin; a report that
+    // dropped them could not tell a missing WebView2 Runtime from a missing packaged file.
+    string[] timestampedLog =
+    [
+        "2026-11-15 20:32:18.100 +08:00 [ERR] [OtherPlugin] other failure",
+        "System.InvalidOperationException: other private detail",
+        "   at OtherPlugin.Run()",
+        "2026-11-15 20:32:18.353 +08:00 [ERR] [DalamudActCompat] HTML overlay WebView2 initialization failed",
+        "Microsoft.Web.WebView2.Core.WebView2RuntimeNotFoundException: Couldn't find a compatible Webview2 Runtime",
+        " ---> System.IO.FileNotFoundException: The system cannot find the file specified. (0x80070002)",
+        "File name: 'C:\\Users\\Alice\\plugin\\WebView2Loader.dll'",
+        "   --- End of inner exception stack trace ---",
+        "   at Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateAsync(String a, String b)",
+        "   at DalamudActCompat.ActRuntime.HtmlOverlayForm.InitializeWebViewAsync()",
+        "2026-11-15 20:32:18.400 +08:00 [INF] [OtherPlugin] next entry",
+        "other continuation without a timestamp",
+        "2026-11-15 20:32:18.500 +08:00 [ERR] [OtherPlugin] callback failed",
+        "System.NullReferenceException: other callback detail",
+        "   at DalamudActCompat.Plugin.OnFrameworkUpdate()",
+        "   at Dalamud.Game.Framework.Update()",
+        "2026-11-15 20:32:18.600 +08:00 [INF] [DalamudActCompat] recovered",
+    ];
+    var timestampedSelection = DiagnosticReportBuilder.SelectRelevantDalamudLines(timestampedLog);
+    Assert(
+        timestampedSelection.SequenceEqual(
+        [
+            timestampedLog[3], timestampedLog[4], timestampedLog[5], timestampedLog[6], timestampedLog[7],
+            timestampedLog[8], timestampedLog[9],
+            // Another plugin's entry: only the frames that name this plugin, as before.
+            timestampedLog[14], timestampedLog[15],
+            timestampedLog[16],
+        ]),
+        "The diagnostic log filter dropped the exception type, message or third-party frames of a " +
+        "plugin entry, or kept lines of another plugin's entry: " +
+        string.Join(" | ", timestampedSelection));
 
     // "复制诊断日志" copies a .txt file: UTF-8 with BOM, ASCII name, only the newest exports kept.
     var exportLogs = Path.Combine(testRoot, "diagnostic-export-logs");

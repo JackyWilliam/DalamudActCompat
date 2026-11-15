@@ -51,6 +51,12 @@ internal static class DiagnosticReportBuilder
         RegexOptions.Compiled | RegexOptions.CultureInvariant | RegexOptions.IgnoreCase,
         TimeSpan.FromMilliseconds(100));
 
+    // Every Dalamud log entry starts with "2026-11-15 20:32:18.353 +08:00 [ERR] ...".
+    private static readonly Regex LogEntryStartPattern = new(
+        @"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(100));
+
     internal static string Build(
         PluginPaths paths,
         DiagnosticReportSnapshot snapshot)
@@ -145,18 +151,41 @@ internal static class DiagnosticReportBuilder
     {
         var selected = new Queue<string>();
         var includeContinuation = false;
+        // True while reading the lines that follow a kept entry whose first line carried a timestamp.
+        var insideKeptEntry = false;
         foreach (var line in lines)
         {
             var directlyRelevant = line.Contains(
                 "DalamudActCompat",
                 StringComparison.OrdinalIgnoreCase);
-            var continuation = includeContinuation && IsExceptionContinuation(line);
-            if (directlyRelevant || continuation)
+            bool keep;
+            if (LogEntryStartPattern.IsMatch(line))
+            {
+                keep = directlyRelevant;
+                insideKeptEntry = keep;
+            }
+            else if (insideKeptEntry)
+            {
+                // Dalamud writes an exception after its entry on lines without a timestamp. The
+                // type and message come first and never mention this plugin, nor do the frames of
+                // the library that threw, so matching by name alone kept only this plugin's own
+                // frames and a report could not tell which exception had been thrown.
+                keep = true;
+            }
+            else
+            {
+                // Either another plugin's entry or a log without timestamps, where an entry's end
+                // cannot be told. Only lines naming this plugin and the stack frames right after
+                // them are taken; anything else may belong to another plugin.
+                keep = directlyRelevant || (includeContinuation && IsExceptionContinuation(line));
+            }
+
+            if (keep)
             {
                 EnqueueBounded(selected, line, maximumLines);
             }
 
-            includeContinuation = directlyRelevant || continuation;
+            includeContinuation = keep;
         }
 
         return selected.ToArray();
