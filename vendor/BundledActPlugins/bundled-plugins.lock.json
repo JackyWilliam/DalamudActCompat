@@ -41,12 +41,13 @@
                         "maintainer":  "Natsukage",
                         "copyright":  "",
                         "projectUrl":  "https://github.com/Natsukage/PostNamazu",
-                        "downloadUrl":  "https://github.com/Natsukage/PostNamazu/releases/download/1.3.6.6/PostNamazu.zip",
+                        "downloadUrl":  "https://github.com/Natsukage/PostNamazu/tree/521007c86343782c6bc9a52d5e192e520fcf32ca",
                         "sourceUrl":  "https://github.com/Natsukage/PostNamazu",
-                        "license":  "Redistribution authorized by the author; the upstream repository declares no SPDX license",
+                        "license":  "Built by DACT from upstream master at the commit in downloadUrl (the call scheduler is not in an official release yet); redistribution authorized by the author; the upstream repository declares no SPDX license",
                         "licenseFile":  "",
                         "relativeAssembly":  "postnamazu/PostNamazu.dll",
-                        "sha256":  "f8f0e09b6eec83d52f76556b289ba7448b56609b1c4d232a0729eac8e0239097",
+                        "sha256":  "4377fc01a08aa76040aa870a95513bff8f1537a746617f8eeee9fe3f5bf835ec",
+                        "disableOnlineUpdates":  true,
                         "enableAfterInstall":  true
                     },
                     {

@@ -6227,8 +6227,12 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         pending.Any(plugin =>
             plugin.Id == "postnamazu" &&
             plugin.Author == "Natsukage" &&
-            plugin.DownloadUrl.Contains("/releases/download/", StringComparison.Ordinal)),
-        "PostNamazu author or DLL URL disclosure is incomplete.");
+            // Bundled as a build of upstream master, so the disclosure names the exact source
+            // commit instead of a release asset (tools/build-postnamazu-snapshot.ps1).
+            System.Text.RegularExpressions.Regex.IsMatch(
+                plugin.DownloadUrl,
+                "^https://github\\.com/Natsukage/PostNamazu/tree/[0-9a-f]{40}$")),
+        "PostNamazu author or source commit disclosure is incomplete.");
     Assert(
         pending.Any(plugin =>
             plugin.Id == "silverdasher" &&
@@ -6351,8 +6355,16 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
         var check = await updateChecker.CheckAsync(
             manager.Plugins,
             CancellationToken.None);
+        // Triggernometry and FoxTTS follow their authors' downloads. PostNamazu, Matcha and
+        // SilverDasher are pinned builds: the bundled PostNamazu is built from upstream master
+        // and the official release with the same version number must not replace it.
+        var onlineUpdatable = manager.Plugins.Where(plugin => !plugin.DisableOnlineUpdates)
+            .Select(plugin => plugin.Id).Order(StringComparer.Ordinal).ToArray();
         Assert(
-            check.Failures.Count == 0 && check.Updates.Count == 3,
+            onlineUpdatable.SequenceEqual(["act.foxtts", "triggernometry"]),
+            $"Unexpected set of online-updatable bundled plugins: {string.Join(", ", onlineUpdatable)}.");
+        Assert(
+            check.Failures.Count == 0 && check.Updates.Count == onlineUpdatable.Length,
             "Runtime author-source checking did not find all simulated DLL updates.");
         Assert(
             check.Updates.All(plugin =>
@@ -6361,11 +6373,11 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
                 File.Exists(plugin.AssemblyPath)),
             "Runtime DLL update candidates were not cached with disclosure URLs.");
         Assert(
-            manager.ApplyOnlineUpdates(check.Updates) == 3,
+            manager.ApplyOnlineUpdates(check.Updates) == onlineUpdatable.Length,
             "Runtime DLL update candidates were not applied to the disclosure gate.");
         var onlinePending = manager.GetPendingDisclosures();
         Assert(
-            onlinePending.Count == 3 &&
+            onlinePending.Count == onlineUpdatable.Length &&
             onlinePending.All(plugin => plugin.IsOnlineUpdate),
             "Online DLL updates did not require a new disclosure.");
         var onlineUpdateIds = check.Updates
@@ -6382,7 +6394,7 @@ static async Task ValidateBundledPluginDisclosureAsync(string testRoot)
             CancellationToken.None);
         Assert(
             manager.GetPendingDisclosures().Count == 0 &&
-            configuration.BundledPluginUpdateRecords.Count == 3,
+            configuration.BundledPluginUpdateRecords.Count == onlineUpdatable.Length,
             "Online DLL updates were not installed, acknowledged, and persisted.");
     }
 
