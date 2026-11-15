@@ -56,11 +56,35 @@ internal static class FfxivEntitySnapshotBuilder
 
         var baselineById = BuildCombatantMap(baseline.Combatants);
         var currentById = BuildCombatantMap(current.Combatants);
-        var upserts = currentById.Values
-            .Where(combatant =>
-                !baselineById.TryGetValue(combatant.Id, out var previous) ||
-                !EquivalentForIncrementalUpdate(previous, combatant))
-            .ToArray();
+        var upserts = new List<HostFfxivCombatant>();
+        List<uint>? keepStatusIds = null;
+        foreach (var combatant in currentById.Values)
+        {
+            if (!baselineById.TryGetValue(combatant.Id, out var previous))
+            {
+                upserts.Add(combatant);
+                continue;
+            }
+
+            var sameStatuses = EquivalentStatuses(previous, combatant);
+            if (sameStatuses && EquivalentFields(previous, combatant))
+            {
+                continue;
+            }
+
+            if (sameStatuses && combatant.Statuses.Count != 0)
+            {
+                // Only the position, HP or cast changed. The Host already holds these statuses
+                // from the baseline, and they are most of what an actor weighs on the wire.
+                upserts.Add(combatant with { Statuses = [] });
+                (keepStatusIds ??= []).Add(combatant.Id);
+            }
+            else
+            {
+                upserts.Add(combatant);
+            }
+        }
+
         var removedIds = baselineById.Keys
             .Where(id => !currentById.ContainsKey(id))
             .ToArray();
@@ -70,7 +94,8 @@ internal static class FfxivEntitySnapshotBuilder
             baseline.Timestamp,
             current.Timestamp,
             upserts,
-            removedIds);
+            removedIds,
+            KeepStatusIds: keepStatusIds);
     }
 
     private static IReadOnlyDictionary<uint, int> BuildPartyTypes(IPartyList partyList)
@@ -147,11 +172,10 @@ internal static class FfxivEntitySnapshotBuilder
             statuses);
     }
 
-    private static bool EquivalentForIncrementalUpdate(
+    private static bool EquivalentFields(
         HostFfxivCombatant left,
         HostFfxivCombatant right)
-    {
-        if (left.Id != right.Id ||
+        => !(left.Id != right.Id ||
             left.OwnerId != right.OwnerId ||
             left.Type != right.Type ||
             left.Job != right.Job ||
@@ -181,8 +205,13 @@ internal static class FfxivEntitySnapshotBuilder
             left.TargetId != right.TargetId ||
             left.EffectiveDistance != right.EffectiveDistance ||
             left.PartyType != right.PartyType ||
-            left.Address != right.Address ||
-            left.Statuses.Count != right.Statuses.Count)
+            left.Address != right.Address);
+
+    private static bool EquivalentStatuses(
+        HostFfxivCombatant left,
+        HostFfxivCombatant right)
+    {
+        if (left.Statuses.Count != right.Statuses.Count)
         {
             return false;
         }

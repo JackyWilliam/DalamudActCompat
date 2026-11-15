@@ -8445,6 +8445,32 @@ static void ValidateFfxivEntityDeltaBuilder()
             [player.Id, spawned.Id]) &&
         changedDelta.RemovedIds.Count == 0,
         "Position changes or newly spawned entities were omitted from the incremental update.");
+    // Statuses are most of an actor's size. One that only moved goes out without them and is
+    // named for the Host to keep what it has; a new actor has nothing to keep and goes whole.
+    Assert(
+        changedDelta.KeepStatusIds is { Count: 1 } kept && kept[0] == player.Id &&
+        changedDelta.Upserts.Single(combatant => combatant.Id == player.Id) is { PosX: 4, Statuses.Count: 0 } &&
+        changedDelta.Upserts.Single(combatant => combatant.Id == spawned.Id).Statuses.Count == 1,
+        "A moved actor still carried its unchanged statuses, or a new actor lost its own.");
+    var restatused = moved with { Statuses = [.. player.Statuses, new HostFfxivStatus(2000, 0, 15, 0x40000002)] };
+    var bare = spawned with { Statuses = [] };
+    var statusDelta = FfxivEntitySnapshotBuilder.BuildDelta(
+        new HostFfxivEntitySnapshot(1, player.Id, baselineAt, [player, bare]),
+        new HostFfxivEntitySnapshot(1, player.Id, baselineAt.AddMilliseconds(60), [restatused, bare with { PosX = 9 }]));
+    Assert(
+        statusDelta.KeepStatusIds is null &&
+        statusDelta.Upserts.Single(combatant => combatant.Id == player.Id).Statuses.Count == 2 &&
+        statusDelta.Upserts.Single(combatant => combatant.Id == bare.Id).PosX == 9,
+        "A changed status list was withheld, or an actor without statuses was marked as keeping some.");
+    // The list survives the wire, and a payload serialized once is used as it is.
+    var serializedDelta = System.Text.Json.JsonSerializer.SerializeToElement(changedDelta);
+    var envelope = HostEnvelope.Create("session", 1, HostMessageTypes.FfxivEntityDelta, HostMessagePriority.State, serializedDelta);
+    var receivedDelta = System.Text.Json.JsonSerializer.Deserialize<HostFfxivEntityDelta>(envelope.Payload)!;
+    Assert(
+        envelope.Payload.GetRawText() == serializedDelta.GetRawText() &&
+        receivedDelta.KeepStatusIds is { Count: 1 } received && received[0] == player.Id &&
+        receivedDelta.Upserts.Count == 2,
+        "An entity delta changed between the game and the Host.");
 
     var latestDuplicate = moved with { PosX = 5 };
     var invalidPlaceholder = moved with

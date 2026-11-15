@@ -5952,6 +5952,65 @@ void ValidateFfxivEntityDeltaRepository()
         owned.Single(combatant => combatant.ID == player.Id).OwnerID == 0 &&
         owned.Single(combatant => combatant.ID == pet.Id).OwnerID == player.Id,
         "Host combatants did not expose Dalamud's no-owner value as ACT's OwnerID 0.");
+
+    // Deltas arrive every 30 ms. An actor that only moved is sent without its statuses and
+    // named in KeepStatusIds; actors the delta does not mention are not rebuilt at all.
+    var buffed = player with
+    {
+        Statuses = [new HostFfxivStatus(50, 1, 20, player.Id), new HostFfxivStatus(51, 0, 8, pet.Id)],
+    };
+    var bystander = pet with { Id = 0x40004321, OwnerId = 0xE0000000, Name = "Host Smoke Bystander" };
+    var keptAt = baselineAt.AddMilliseconds(700);
+    repository.Apply(baseline with { Timestamp = keptAt, Combatants = [bystander, buffed] });
+    var beforeDelta = repository.GetCombatantList();
+    var buffsBefore = beforeDelta.Single(combatant => combatant.ID == player.Id).NetworkBuffs;
+    Assert(
+        beforeDelta[0].ID == player.Id && buffsBefore.Length == 2,
+        "The local player is no longer listed first, or its statuses were lost in a full snapshot.");
+    Assert(
+        repository.ApplyDelta(new HostFfxivEntityDelta(
+            baseline.TerritoryId,
+            baseline.CurrentPlayerId,
+            keptAt,
+            keptAt.AddMilliseconds(30),
+            [buffed with { PosX = buffed.PosX + 3, Statuses = [] }],
+            [],
+            KeepStatusIds: [player.Id])),
+        "A delta that keeps statuses was rejected.");
+    var afterDelta = repository.GetCombatantList();
+    var movedPlayer = afterDelta.Single(combatant => combatant.ID == player.Id);
+    Assert(
+        afterDelta[0].ID == player.Id &&
+        movedPlayer.PosX == buffed.PosX + 3 &&
+        ReferenceEquals(movedPlayer.NetworkBuffs, buffsBefore) &&
+        movedPlayer.NetworkBuffs.Select(buff => (int)buff.BuffID).SequenceEqual([50, 51]) &&
+        ReferenceEquals(
+            afterDelta.Single(combatant => combatant.ID == bystander.Id),
+            beforeDelta.Single(combatant => combatant.ID == bystander.Id)),
+        "A moved actor lost the statuses its delta left out, or an untouched actor was rebuilt.");
+    // Without the list an empty status list means what it says: the statuses are gone.
+    Assert(
+        repository.ApplyDelta(new HostFfxivEntityDelta(
+            baseline.TerritoryId,
+            baseline.CurrentPlayerId,
+            keptAt,
+            keptAt.AddMilliseconds(60),
+            [buffed with { Statuses = [] }],
+            [])) &&
+        repository.GetCombatantList().Single(combatant => combatant.ID == player.Id).NetworkBuffs.Length == 0 &&
+        repository.GetCombatantList().Count == 2,
+        "An actor whose statuses ended kept them.");
+    // A removed actor disappears and a new one is appended, with the player still first.
+    Assert(
+        repository.ApplyDelta(new HostFfxivEntityDelta(
+            baseline.TerritoryId,
+            baseline.CurrentPlayerId,
+            keptAt,
+            keptAt.AddMilliseconds(90),
+            [pet],
+            [bystander.Id])) &&
+        repository.GetCombatantList().Select(combatant => combatant.ID).SequenceEqual([player.Id, pet.Id]),
+        "Removal and insertion in one delta produced the wrong actor list.");
 }
 
 IEnumerable<TypeDefinition> EnumerateCecilTypes(TypeDefinition type)

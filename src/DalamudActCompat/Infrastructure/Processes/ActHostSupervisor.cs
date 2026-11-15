@@ -407,6 +407,26 @@ public sealed class ActHostSupervisor : IAsyncDisposable
             delta,
             deadline: DateTimeOffset.UtcNow.AddSeconds(2));
 
+    /// <summary>Whether entity captures sent now would reach a Host.</summary>
+    public bool IsRunning => state == HostSupervisorState.Running;
+
+    // The game's frame thread sends the same capture to every running Host. These take the
+    // payload already serialized, asked for only if this Host runs, so it is serialized once
+    // however many Hosts receive it and not at all when none does.
+    public bool PublishFfxivEntities(Func<System.Text.Json.JsonElement> serializedSnapshot)
+        => state == HostSupervisorState.Running && ipc.TryEnqueue(
+            HostMessageTypes.FfxivEntities,
+            HostMessagePriority.State,
+            serializedSnapshot(),
+            deadline: DateTimeOffset.UtcNow.AddSeconds(2));
+
+    public bool PublishFfxivEntityDelta(Func<System.Text.Json.JsonElement> serializedDelta)
+        => state == HostSupervisorState.Running && ipc.TryEnqueue(
+            HostMessageTypes.FfxivEntityDelta,
+            HostMessagePriority.State,
+            serializedDelta(),
+            deadline: DateTimeOffset.UtcNow.AddSeconds(2));
+
     public bool OpenPluginUi(string pluginId)
         => state == HostSupervisorState.Running && ipc.TryEnqueue(
             HostMessageTypes.PluginOpen,

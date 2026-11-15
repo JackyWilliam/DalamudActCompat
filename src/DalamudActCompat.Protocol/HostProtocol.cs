@@ -5,7 +5,9 @@ namespace DalamudActCompat.Protocol;
 
 public static class HostProtocol
 {
-    public const int CurrentVersion = 7;
+    // 8: an entity delta may send an upsert without its statuses and name it in KeepStatusIds.
+    // A version 7 Host would read that as "no statuses", so the two must not be paired.
+    public const int CurrentVersion = 8;
     public const int MaximumFrameBytes = 1024 * 1024;
     public const int ControlQueueCapacity = 256;
     public const int DataQueueCapacity = 8192;
@@ -91,7 +93,9 @@ public sealed record HostEnvelope(
             correlationId,
             DateTimeOffset.UtcNow,
             deadline,
-            JsonSerializer.SerializeToElement(payload));
+            // A caller that sends one payload to several Hosts serializes it once and passes
+            // the element; serializing an element again would only copy it.
+            payload is JsonElement element ? element : JsonSerializer.SerializeToElement(payload));
 }
 
 public enum HostGameRegion
@@ -230,6 +234,10 @@ public sealed record HostFfxivEntitySnapshot(
     IReadOnlyList<HostFfxivCombatant> Combatants,
     long Epoch = 0);
 
+// KeepStatusIds: upserts whose statuses equal the baseline's (remaining times aside, which only
+// a full snapshot refreshes). They are sent with an empty status list and the Host keeps the
+// ones it has. Statuses are most of an actor's size, and in a crowded fight nearly every actor
+// moves on every capture while its statuses stay the same.
 public sealed record HostFfxivEntityDelta(
     uint TerritoryId,
     uint CurrentPlayerId,
@@ -237,7 +245,8 @@ public sealed record HostFfxivEntityDelta(
     DateTimeOffset Timestamp,
     IReadOnlyList<HostFfxivCombatant> Upserts,
     IReadOnlyList<uint> RemovedIds,
-    long Epoch = 0);
+    long Epoch = 0,
+    IReadOnlyList<uint>? KeepStatusIds = null);
 
 public sealed record HostPostNamazuHeading(
     long Address,

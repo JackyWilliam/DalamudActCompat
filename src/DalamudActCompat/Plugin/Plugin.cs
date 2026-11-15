@@ -5395,6 +5395,16 @@ public sealed class Plugin : IDalamudPlugin
         {
             return;
         }
+        // The 30 ms captures exist only to keep the Hosts' entities fresh. Without a running
+        // Host, reading the whole object table that often is pure cost on the frame thread;
+        // the 500 ms capture below still refreshes the identities the parser uses.
+        if (!fullSnapshotDue &&
+            !hostSupervisor.IsRunning &&
+            !genericHostSupervisor.IsRunning &&
+            !(Volatile.Read(ref matchaEventsEnabled) == 1 && matchaHostSupervisor.IsRunning))
+        {
+            return;
+        }
 
         nextHostEntityDeltaAt = now.AddMilliseconds(30);
         if (fullSnapshotDue)
@@ -5434,11 +5444,16 @@ public sealed class Plugin : IDalamudPlugin
                 Volatile.Write(ref playerIdentitySnapshot, identities);
                 Volatile.Write(ref observedPlayerIdentitySnapshot, BuildObservedPlayerIdentities(objectTable));
                 hostEntitySnapshotBaseline = snapshot;
-                hostSupervisor.PublishFfxivEntities(snapshot);
-                genericHostSupervisor.PublishFfxivEntities(snapshot);
+                // Serialized on first use and shared: this is the frame thread, and three
+                // Hosts used to cost three serializations of every actor in the zone.
+                System.Text.Json.JsonElement? serializedSnapshot = null;
+                System.Text.Json.JsonElement SerializedSnapshot()
+                    => serializedSnapshot ??= System.Text.Json.JsonSerializer.SerializeToElement(snapshot);
+                hostSupervisor.PublishFfxivEntities(SerializedSnapshot);
+                genericHostSupervisor.PublishFfxivEntities(SerializedSnapshot);
                 if (Volatile.Read(ref matchaEventsEnabled) == 1)
                 {
-                    matchaHostSupervisor.PublishFfxivEntities(snapshot);
+                    matchaHostSupervisor.PublishFfxivEntities(SerializedSnapshot);
                 }
 
                 hostEntityEpochClock.MarkPublished(epoch);
@@ -5455,11 +5470,14 @@ public sealed class Plugin : IDalamudPlugin
             }
 
             hostEntityEpochClock.MarkPublished(epoch);
-            hostSupervisor.PublishFfxivEntityDelta(delta);
-            genericHostSupervisor.PublishFfxivEntityDelta(delta);
+            System.Text.Json.JsonElement? serializedDelta = null;
+            System.Text.Json.JsonElement SerializedDelta()
+                => serializedDelta ??= System.Text.Json.JsonSerializer.SerializeToElement(delta);
+            hostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
+            genericHostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
             if (Volatile.Read(ref matchaEventsEnabled) == 1)
             {
-                matchaHostSupervisor.PublishFfxivEntityDelta(delta);
+                matchaHostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
             }
         }
         catch (Exception ex)
