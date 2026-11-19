@@ -11,17 +11,13 @@ namespace DalamudActCompat.Encounters;
 // Samples a duty pull for 战斗记录 · 开荒进度. ACT encounters only carry totals, so the game is
 // read directly while the party fights inside a duty:
 // - phase: FFLogs' phase where FflogsPhases knows the fight, otherwise the main boss (the
-//   targetable enemy with the largest max HP) changing name;
+//   targetable enemy with the largest max HP) changing (MainBossPhases);
 // - how far: that boss's HP at the last sample before the pull ended;
 // - wipe cause: the boss's most recent cast when the first party member fell;
 // - clear or wipe: Dalamud's duty events, which ACT does not report.
 internal sealed class ProgressionTracker : IDisposable
 {
     private const double SampleSeconds = .25;
-    // A new boss name must hold this long, and a phase must last this long, before it counts;
-    // otherwise a big add or a boss going briefly untargetable would look like a phase change.
-    private const double BossSettleSeconds = 2;
-    private const double MinimumPhaseSeconds = 30;
     // A cast older than this when someone dies is unlikely to be what killed them.
     private const double CastRelevanceSeconds = 12;
 
@@ -40,12 +36,13 @@ internal sealed class ProgressionTracker : IDisposable
     private DateTimeOffset pullStart;
     private uint territory;
     private string dutyName = string.Empty;
-    private readonly List<string> bosses = [];
+    private readonly MainBossPhases mainBossPhases = new();
+    // Name ids of the enemies targetable in the current sample; kept to avoid allocating one per sample.
+    private readonly HashSet<uint> present = [];
     // FFLogs' phase, for the fights FflogsPhases knows.
     private int fflogsPhase;
-    private DateTimeOffset lastPhaseAt;
-    private string? candidate;
-    private DateTimeOffset candidateSince;
+    // The least HP the current FFLogs phase's bosses have shown (see FflogsPhases.Next).
+    private double fflogsLowestHp;
     private double bossHp = 1;
     private string? lastCast;
     private DateTimeOffset lastCastAt;
@@ -133,10 +130,9 @@ internal sealed class ProgressionTracker : IDisposable
         inPull = true;
         pullStart = now;
         territory = clientState.TerritoryType;
-        bosses.Clear();
+        mainBossPhases.Reset(now);
         fflogsPhase = 1;
-        lastPhaseAt = now;
-        candidate = null;
+        fflogsLowestHp = 1;
         bossHp = 1;
         lastCast = null;
         firstDeath = null;
@@ -155,6 +151,7 @@ internal sealed class ProgressionTracker : IDisposable
     {
         IBattleNpc? boss = null;
         var phased = FflogsPhases.Covers(territory);
+        present.Clear();
         foreach (var gameObject in objectTable)
         {
             // Combatant covers every battle NPC; the hostile flag keeps escorted or allied NPCs out.
@@ -162,37 +159,17 @@ internal sealed class ProgressionTracker : IDisposable
                 (npc.StatusFlags & StatusFlags.Hostile) == 0 ||
                 !npc.IsTargetable || npc.MaxHp == 0 || npc.CurrentHp == 0) continue;
             if (boss is null || npc.MaxHp > boss.MaxHp) boss = npc;
+            present.Add(npc.NameId);
             // Every targetable enemy counts, not just the biggest: a returning boss can share the
             // arena with one that has more HP (Futures Rewritten P4).
-            if (phased) fflogsPhase = FflogsPhases.Next(territory, fflogsPhase, id => id == npc.NameId);
+            if (phased)
+                fflogsPhase = FflogsPhases.Next(territory, fflogsPhase, npc.NameId, (double)npc.CurrentHp / npc.MaxHp, ref fflogsLowestHp);
         }
 
         if (boss is not null)
         {
-            var name = boss.Name.TextValue;
-            if (bosses.Count == 0)
-            {
-                bosses.Add(name);
-                lastPhaseAt = now;
-            }
-            else if (name != bosses[^1])
-            {
-                if (candidate != name)
-                {
-                    candidate = name;
-                    candidateSince = now;
-                }
-                else if ((now - candidateSince).TotalSeconds >= BossSettleSeconds &&
-                         (now - lastPhaseAt).TotalSeconds >= MinimumPhaseSeconds)
-                {
-                    bosses.Add(name);
-                    lastPhaseAt = now;
-                    candidate = null;
-                }
-            }
-            else candidate = null;
-
-            if (name == bosses[^1]) bossHp = (double)boss.CurrentHp / boss.MaxHp;
+            if (mainBossPhases.See(now, boss.NameId, boss.Name.TextValue, present))
+                bossHp = (double)boss.CurrentHp / boss.MaxHp;
             if (boss.IsCasting && boss.CastActionId != 0 &&
                 data.GetExcelSheet<Lumina.Excel.Sheets.Action>().GetRowOrDefault(boss.CastActionId) is { } action &&
                 action.Name.ToString() is { Length: > 0 } castName)
@@ -230,14 +207,14 @@ internal sealed class ProgressionTracker : IDisposable
         if (!inPull) return;
         inPull = false;
         // Trash pulls and duties without a boss would only add noise to the chart.
-        if (bosses.Count == 0) return;
+        if (mainBossPhases.Bosses.Count == 0) return;
         store.Add(new ProgressionPull(
             territory,
             dutyName,
             pullStart,
             DateTimeOffset.UtcNow,
             cleared,
-            bosses.ToArray(),
+            mainBossPhases.Bosses.ToArray(),
             cleared ? 0 : bossHp,
             cleared ? null : wipeCast,
             firstDeath,
