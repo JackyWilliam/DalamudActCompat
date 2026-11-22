@@ -69,7 +69,7 @@ The question-mark button in the header opens the complete in-game guide. It supp
 
 Starting with 1.0, Friends lives in the Control Center sidebar: find accounts, handle friend requests, and open chats, which can also be popped out into their own windows. The status popup controls presence and optional duty sharing. Notification settings provide independent bubble and sound switches, position and background opacity controls, and four sounds with previews. Each pair of friends retains the latest 20 history messages and latest three pending offline messages across both participants. Friend requests are separate from registration invitation codes.
 
-> Open FFLogs upload logs only opens the local Network log directory and copies its path. It does not upload automatically. Diagnostic logs are for troubleshooting and do not replace combat logs.
+> The FFLogs card accepts a FFLogs account login, signs in for the current session, and uploads the latest Network log through the desktop-client protocol. Diagnostic logs are for troubleshooting and do not replace combat logs.
 
 ## Interface preview
 

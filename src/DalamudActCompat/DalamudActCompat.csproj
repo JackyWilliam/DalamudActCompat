@@ -37,6 +37,9 @@
     <ProjectReference Include="../DalamudActCompat.Protocol/DalamudActCompat.Protocol.csproj" />
     <ProjectReference Include="../DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />
     <PackageReference Include="SharpCompress" Version="0.50.1" />
+    <PackageReference Include="Microsoft.ClearScript.V8" Version="7.5.0" />
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.0" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.ClearScript.V8.ICUData" Version="7.5.0" GeneratePathProperty="true" Condition="'$(SingleFile)' == 'true'" />
     <!-- AI 助手 talks to Claude through the official SDK with the player's own key. -->
     <PackageReference Include="Anthropic" Version="13.6.0" />
     <Content Include="../../vendor/IINACT/LICENSE" Link="LICENSES/IINACT-GPL-3.0.txt" CopyToOutputDirectory="PreserveNewest" />
@@ -63,6 +66,8 @@
     <!-- Plugin list tools (e.g. omni) read the icon from the installed folder at the Dalamud
          convention images/icon.png rather than downloading IconUrl, so it ships in the package. -->
     <Content Include="images/icon.png" Link="images/icon.png" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="$(PkgMicrosoft_ClearScript_V8_Native_win-x64)\runtimes\win-x64\native\ClearScriptV8.win-x64.dll"
+          Link="ClearScriptV8.win-x64.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <Target Name="CopyCompatibilityHost" BeforeTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">

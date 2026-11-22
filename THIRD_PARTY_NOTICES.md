@@ -20,6 +20,11 @@ Source: <https://github.com/microsoft/ClearScript/tree/7.5.0>.
 ACTLogsUploader, the Titan tool (`ACT.JSB_5`), and their native V8/ICU companions
 are not bundled or downloaded by DACT; users supply those files themselves.
 
+The FFLogs upload transport and parser integration under `src/DalamudActCompat/Fflogs/Upload`
+are adapted from [ACTLogsUploader](https://github.com/zhui-zi/ACTLogsUploader),
+licensed under MIT. The source repository's `NOTICE` and `LICENSE` files apply to
+the adapted files.
+
 The optional AI assistant uses the official Anthropic C# SDK 13.6.0
 (Copyright 2023 Anthropic, PBC), licensed under Apache-2.0; its license text is
 included as `LICENSES/Anthropic-SDK-Apache-2.0.txt`.

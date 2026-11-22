@@ -9,6 +9,7 @@ using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Fflogs;
+using DalamudActCompat.Fflogs.Upload;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Logging;
@@ -21,6 +22,7 @@ using DalamudActCompat.Protocol;
 using DalamudActCompat.Quality;
 using DalamudActCompat.UI.Kit;
 using System.Numerics;
+using FflogsFightUpload = DalamudActCompat.Fflogs.Upload.ParserEngine.FightUpload;
 
 namespace DalamudActCompat.UI;
 
@@ -95,6 +97,16 @@ public sealed partial class ControlCenterWindow : Window
     private readonly PluginLogger logger;
     private readonly UiText text;
     private readonly FflogsEstimateService fflogsEstimateService;
+    private readonly FflogsUploadService fflogsUploadService;
+    private string fflogsUploadPassword = string.Empty;
+    private bool fflogsUploadPasswordInitialized;
+    private bool fflogsRememberPassword = true;
+    private bool fflogsUploadSettingsOpen;
+    private Task<string>? fflogsUploadTask;
+    private Task<IReadOnlyList<FflogsFightUpload>>? fflogsPrepareTask;
+    private IReadOnlyList<FflogsFightUpload> fflogsPreparedFights = [];
+    private readonly HashSet<int> fflogsSelectedFights = [];
+    private string fflogsUploadStatus = string.Empty;
     private readonly CombatQualitySnapshot? combatQualitySnapshot;
     private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
@@ -200,6 +212,7 @@ public sealed partial class ControlCenterWindow : Window
         PluginLogger logger,
         UiText text,
         FflogsEstimateService fflogsEstimateService,
+        FflogsUploadService fflogsUploadService,
         CombatQualitySnapshot? combatQualitySnapshot,
         Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
@@ -257,6 +270,7 @@ public sealed partial class ControlCenterWindow : Window
         this.logger = logger;
         this.text = text;
         this.fflogsEstimateService = fflogsEstimateService;
+        this.fflogsUploadService = fflogsUploadService;
         this.combatQualitySnapshot = combatQualitySnapshot;
         this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
@@ -2884,6 +2898,12 @@ public sealed partial class ControlCenterWindow : Window
     {
         var s = DactUi.S;
         var changed = false;
+        if (!fflogsUploadPasswordInitialized)
+        {
+            fflogsUploadPassword = fflogsUploadService.LoadSavedPassword() ?? string.Empty;
+            fflogsRememberPassword = fflogsUploadService.HasSavedPassword;
+            fflogsUploadPasswordInitialized = true;
+        }
         var status = fflogsEstimateService.Status;
         DactUi.BeginCard("meter-fflogs", null);
         DactUi.CardTitleRow(text.Get("FFLogs Parse 预估", "FFLogs Parse estimate"),
@@ -2954,6 +2974,180 @@ public sealed partial class ControlCenterWindow : Window
             changed = true;
         }
         DactUi.EndField();
+
+        DactUi.Divider();
+        DactUi.Hint(text.Get(
+            "使用 FFLogs 网站账号上传当前 Network 日志。密码只在本次运行中保留。",
+            "Use your FFLogs account to upload the current Network log. The password is kept only for this run."));
+        DactUi.BeginField(text.Get("FFLogs 登录邮箱", "FFLogs login email"));
+        var uploadEmail = configuration.Fflogs.UploadEmail;
+        if (DactUi.Input("fflogs-upload-email", ref uploadEmail, text.Get("输入邮箱", "Enter email"), 256))
+        {
+            UpdateFflogsSettings(settings => settings.UploadEmail = uploadEmail.Trim());
+            changed = true;
+        }
+        DactUi.EndField();
+        DactUi.BeginField(text.Get("FFLogs 登录密码", "FFLogs login password"));
+        if (DactUi.Input("fflogs-upload-password", ref fflogsUploadPassword,
+            text.Get("输入密码", "Enter password"), 256, secret: true)) changed = true;
+        DactUi.EndField();
+        if (DactUi.ToggleRow(text.Get("记住密码", "Remember password"), ref fflogsRememberPassword))
+        {
+            if (!fflogsRememberPassword) fflogsUploadService.ClearSavedPassword();
+            changed = true;
+        }
+        var chinese = getGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese;
+        DactUi.Disclosure(text.Get("上传设置", "Upload settings"), ref fflogsUploadSettingsOpen);
+        if (fflogsUploadSettingsOpen)
+        {
+        var autoLogin = configuration.Fflogs.UploadAutoLogin;
+        if (DactUi.ToggleRow(text.Get("启动时自动登录", "Sign in automatically on startup"), ref autoLogin))
+        {
+            UpdateFflogsSettings(settings => settings.UploadAutoLogin = autoLogin);
+            changed = true;
+        }
+        var autoLive = configuration.Fflogs.UploadAutoStartLive;
+        if (DactUi.ToggleRow(text.Get("登录后自动实时上传", "Start live upload after sign-in"), ref autoLive))
+        {
+            UpdateFflogsSettings(settings => settings.UploadAutoStartLive = autoLive);
+            changed = true;
+        }
+        var previousFights = configuration.Fflogs.UploadPreviousFights;
+        if (DactUi.ToggleRow(text.Get("实时上传包含已有战斗", "Include previous fights in live upload"), ref previousFights))
+        {
+            UpdateFflogsSettings(settings => settings.UploadPreviousFights = previousFights);
+            changed = true;
+        }
+        DactUi.BeginField(text.Get("报告描述", "Report description"));
+        var description = configuration.Fflogs.UploadDescription;
+        if (DactUi.Input("fflogs-upload-description", ref description, text.Get("可选", "Optional"), 256))
+        {
+            UpdateFflogsSettings(settings => settings.UploadDescription = description);
+            changed = true;
+        }
+        DactUi.EndField();
+        var visibility = configuration.Fflogs.UploadVisibility;
+        var visibilityIndex = Math.Clamp(visibility, 0, 2);
+        if (DactTheme.Combo(text.Get("报告可见性", "Report visibility") + "##fflogs-visibility", ref visibilityIndex,
+                [text.Get("公开", "Public"), text.Get("私人", "Private"), text.Get("不公开", "Unlisted")], 3))
+        {
+            UpdateFflogsSettings(settings => settings.UploadVisibility = visibilityIndex);
+            changed = true;
+        }
+        var regionValues = chinese ? new[] { 1 } : new[] { 1, 2, 3, 6 };
+        var regionNames = chinese ? new[] { "CN" } : new[] { "NA", "EU", "JP", "OC" };
+        var regionIndex = Array.IndexOf(regionValues, configuration.Fflogs.UploadRegion);
+        if (regionIndex < 0) regionIndex = 0;
+        if (DactTheme.Combo(text.Get("报告区域", "Report region") + "##fflogs-region", ref regionIndex, regionNames, regionNames.Length))
+        {
+            UpdateFflogsSettings(settings => settings.UploadRegion = regionValues[regionIndex]);
+            changed = true;
+        }
+        var guilds = fflogsUploadService.Guilds;
+        var guildIndex = guilds.ToList().FindIndex(guild => string.Equals(guild.Id, configuration.Fflogs.UploadGuildId, StringComparison.Ordinal));
+        if (guildIndex < 0) guildIndex = 0;
+        var guildItems = guilds.Count == 0
+            ? [text.Get("无可用公会", "No guilds available")]
+            : guilds.Select(guild => $"{guild.Name} ({guild.Id})").ToArray();
+        if (DactTheme.Combo(text.Get("公会", "Guild") + "##fflogs-upload-guild", ref guildIndex, guildItems, guildItems.Length) && guilds.Count > 0)
+        {
+            UpdateFflogsSettings(settings => settings.UploadGuildId = guilds[guildIndex].Id);
+            changed = true;
+        }
+        }
+        var loginLabel = fflogsUploadService.IsLoggedIn
+            ? text.Format($"已登录 {fflogsUploadService.Username}", $"Signed in as {fflogsUploadService.Username}")
+            : text.Get("登录 FFLogs", "Sign in to FFLogs");
+        if (DactUi.Button(loginLabel + "##fflogs-upload-login", ButtonKind.Secondary) &&
+            fflogsUploadTask is null &&
+            !string.IsNullOrWhiteSpace(configuration.Fflogs.UploadEmail) && !string.IsNullOrEmpty(fflogsUploadPassword))
+        {
+            fflogsUploadTask = fflogsUploadService.LoginAsync(
+                configuration.Fflogs.UploadEmail, fflogsUploadPassword, chinese).ContinueWith(task =>
+                {
+                    if (task.IsFaulted) throw task.Exception!.GetBaseException();
+                    if (!task.Result) throw new InvalidOperationException(text.Get("FFLogs 登录失败。", "FFLogs sign-in failed."));
+                    if (fflogsRememberPassword) fflogsUploadService.SavePassword(fflogsUploadPassword);
+                    else fflogsUploadService.ClearSavedPassword();
+                    return "LOGIN_OK";
+                });
+        }
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(text.Get("上传最新日志", "Upload latest log"), icon: "upload"));
+        if (DactUi.Button(text.Get("上传最新日志", "Upload latest log") + "##fflogs-upload-latest", icon: "upload") &&
+            fflogsUploadService.IsLoggedIn && fflogsUploadTask is null)
+        {
+            fflogsUploadTask = fflogsUploadService.UploadLatestAsync(getCombatLogDirectory(), chinese);
+        }
+        DactUi.SameLineIfFits(DactUi.ButtonWidth(text.Get("解析战斗", "Prepare fights"), icon: "search"));
+        if (DactUi.Button(text.Get("解析战斗", "Prepare fights") + "##fflogs-prepare", icon: "search") &&
+            fflogsPrepareTask is null && fflogsUploadService.IsLoggedIn)
+            fflogsPrepareTask = fflogsUploadService.PrepareAsync(getCombatLogDirectory(), chinese);
+        if (fflogsPrepareTask is { IsCompleted: true } prepared)
+        {
+            fflogsPrepareTask = null;
+            if (prepared.IsCompletedSuccessfully)
+            {
+                fflogsPreparedFights = prepared.Result;
+                fflogsSelectedFights.Clear();
+                fflogsUploadStatus = text.Format($"已解析 {fflogsPreparedFights.Count} 场战斗。", $"Prepared {fflogsPreparedFights.Count} fights.");
+            }
+            else
+                fflogsUploadStatus = text.Format($"解析失败：{prepared.Exception?.GetBaseException().Message}",
+                    $"Prepare failed: {prepared.Exception?.GetBaseException().Message}");
+        }
+        if (fflogsPreparedFights.Count > 0)
+        {
+            DactUi.Hint(text.Get("选择要上传的战斗", "Select fights to upload"));
+            for (var i = 0; i < fflogsPreparedFights.Count; i++)
+            {
+                var selected = fflogsSelectedFights.Contains(i);
+                var fightName = fflogsPreparedFights[i].Fight.Name;
+                if (ImGui.Checkbox($"{fightName}##fflogs-fight-{i}", ref selected))
+                {
+                    if (selected) fflogsSelectedFights.Add(i); else fflogsSelectedFights.Remove(i);
+                }
+            }
+            if (DactUi.Button(text.Get("上传选中战斗", "Upload selected fights") + "##fflogs-upload-selected", icon: "upload") &&
+                fflogsUploadTask is null && fflogsSelectedFights.Count > 0)
+            {
+                var selected = fflogsPreparedFights.Where((_, index) => fflogsSelectedFights.Contains(index)).ToArray();
+                fflogsUploadTask = fflogsUploadService.UploadPreparedAsync(getCombatLogDirectory(), chinese, selected,
+                    configuration.Fflogs.UploadVisibility, configuration.Fflogs.UploadRegion,
+                    configuration.Fflogs.UploadGuildId, configuration.Fflogs.UploadDescription);
+            }
+        }
+        if (fflogsUploadTask is { IsCompleted: false } &&
+            DactUi.Button(text.Get("取消上传", "Cancel upload") + "##fflogs-cancel", ButtonKind.Secondary))
+        {
+            fflogsUploadService.CancelCurrentOperation();
+            fflogsUploadStatus = text.Get("上传已取消。", "Upload cancelled.");
+        }
+        var liveLabel = fflogsUploadService.IsLiveLogging
+            ? text.Get("停止实时上传", "Stop live upload")
+            : text.Get("开始实时上传", "Start live upload");
+        if (DactUi.Button(liveLabel + "##fflogs-live", icon: fflogsUploadService.IsLiveLogging ? "stop" : "play"))
+        {
+            try
+            {
+                if (fflogsUploadService.IsLiveLogging) fflogsUploadService.StopLive();
+                else fflogsUploadService.StartLive(getCombatLogDirectory(), chinese,
+                    configuration.Fflogs.UploadVisibility, configuration.Fflogs.UploadRegion,
+                    configuration.Fflogs.UploadGuildId, configuration.Fflogs.UploadDescription,
+                    configuration.Fflogs.UploadPreviousFights);
+            }
+            catch (Exception ex) { fflogsUploadStatus = ex.Message; }
+        }
+        if (fflogsUploadTask is { IsCompleted: true } completed)
+        {
+            fflogsUploadTask = null;
+            fflogsUploadStatus = completed.IsCompletedSuccessfully && completed.Result == "LOGIN_OK"
+                ? text.Get("FFLogs 登录成功。", "FFLogs sign-in succeeded.")
+                : completed.IsCompletedSuccessfully
+                ? text.Format($"上传完成：{completed.Result}", $"Upload complete: {completed.Result}")
+                : text.Format($"上传失败：{completed.Exception?.GetBaseException().Message}",
+                    $"Upload failed: {completed.Exception?.GetBaseException().Message}");
+        }
+        if (!string.IsNullOrWhiteSpace(fflogsUploadStatus)) DactUi.Hint(fflogsUploadStatus);
 
         if (DactUi.Button(text.Get("测试并刷新", "Test and refresh") + "##fflogs-refresh", ButtonKind.Primary))
             fflogsEstimateService.RequestRefresh(getCurrentEncounter());

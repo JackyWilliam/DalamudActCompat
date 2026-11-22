@@ -15,6 +15,7 @@ using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
+using FflogsUploadService = DalamudActCompat.Fflogs.Upload.FflogsUploadService;
 using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Ipc;
@@ -79,6 +80,7 @@ public sealed class Plugin : IDalamudPlugin
     private readonly MeterStyleEditorWindow meterStyleEditorWindow;
     private readonly SimplifiedHomeWindow simplifiedHomeWindow;
     private readonly FflogsEstimateService fflogsEstimateService;
+    private readonly FflogsUploadService fflogsUploadService;
     private readonly ZoneNameLocalizer zoneNameLocalizer;
     private readonly EncounterModeStateProvider encounterModeStateProvider;
     private readonly EncounterWindow encounterWindow;
@@ -453,6 +455,7 @@ public sealed class Plugin : IDalamudPlugin
             paths.FflogsCacheFile,
             logger,
             () => ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese);
+        fflogsUploadService = new FflogsUploadService(logger, () => paths.CombatLogDirectory, paths.FflogsUploadCredentialFile);
         actRuntime = new SelfHostedActRuntime(
             pluginInterface,
             log,
@@ -701,6 +704,7 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             text,
             fflogsEstimateService,
+            fflogsUploadService,
             combatQualitySnapshot,
             () => stateStore.GetSnapshot().Current,
             logoTexture,
@@ -913,6 +917,7 @@ public sealed class Plugin : IDalamudPlugin
 
         DalamudActCompat.UI.Kit.DactFonts.Initialize(pluginInterface.UiBuilder);
         pluginInterface.UiBuilder.Draw += Draw;
+        _ = StartFflogsUploadStartupAsync();
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
@@ -5119,6 +5124,29 @@ public sealed class Plugin : IDalamudPlugin
         await DisposeRemainingComponentsAsync().ConfigureAwait(false);
     }
 
+    private async Task StartFflogsUploadStartupAsync()
+    {
+        try
+        {
+            var settings = configuration.Fflogs;
+            if (!settings.UploadAutoLogin || string.IsNullOrWhiteSpace(settings.UploadEmail) ||
+                !fflogsUploadService.HasSavedPassword)
+                return;
+            var chinese = ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese;
+            if (!await fflogsUploadService.LoginAsync(settings.UploadEmail,
+                    fflogsUploadService.LoadSavedPassword()!, chinese).ConfigureAwait(false))
+                return;
+            if (settings.UploadAutoStartLive)
+                fflogsUploadService.StartLive(ResolveCombatLogDirectory(), chinese, settings.UploadVisibility,
+                    settings.UploadRegion, settings.UploadGuildId, settings.UploadDescription,
+                    settings.UploadPreviousFights);
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"FFLogs upload auto-start failed: {ex.Message}");
+        }
+    }
+
     private async Task DisposeRemainingComponentsAsync()
     {
         await ShutdownCactbotOperationsAsync().ConfigureAwait(false);
@@ -5132,6 +5160,7 @@ public sealed class Plugin : IDalamudPlugin
             await parserEngine.DisposeAsync().ConfigureAwait(false);
             await encounterService.DisposeAsync().ConfigureAwait(false);
             await fflogsEstimateService.DisposeAsync().ConfigureAwait(false);
+            fflogsUploadService.Dispose();
             Volatile.Write(ref matchaEventsEnabled, 0);
             actRuntime.SetNetworkSentCaptureEnabled(false);
             await matchaHostSupervisor.DisposeAsync().ConfigureAwait(false);

@@ -71,7 +71,7 @@ Dalamud 先安装约 31 MiB 的核心包，插件再按缺失项获取 Host、Ca
 
 1.0 起，好友在控制中心左侧导航，可以查找账号、处理好友申请和打开聊天，聊天也能拆成独立窗口。状态弹窗可设置在线状态及是否分享当前副本；来信提醒设置支持独立开关气泡和声音、调整位置与背景透明度、选择及试听四种提示音。每对好友双方合计保留最近 20 条历史和最新 3 条离线待收消息。这里的好友申请与注册用的邀请码是两个独立功能。
 
-> “打开 FFLogs 上传日志”只会打开本地 Network 日志目录并复制路径，不会自动上传。诊断日志用于排错，不能代替战斗日志。
+> The FFLogs card supports account sign-in and upload of the current Network log. Diagnostic logs are for troubleshooting and do not replace combat logs.
 
 ## 界面预览
 

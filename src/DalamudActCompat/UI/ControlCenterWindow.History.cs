@@ -6,6 +6,8 @@ using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using DalamudActCompat.Meter;
+using DalamudActCompat.Plugin;
+using DalamudActCompat.Protocol;
 using DalamudActCompat.UI.Kit;
 
 namespace DalamudActCompat.UI;
@@ -16,6 +18,8 @@ namespace DalamudActCompat.UI;
 // 开荒进度 is new and reads the pulls ProgressionTracker records in duties.
 public sealed partial class ControlCenterWindow
 {
+    private Task<string>? historyUploadTask;
+    private string historyUploadStatus = string.Empty;
     private int historyTab;
     private Guid? historySelectedId;
     private readonly HashSet<Guid> historyExpandedFolders = [];
@@ -280,22 +284,44 @@ public sealed partial class ControlCenterWindow
         }.Where(static part => !string.IsNullOrEmpty(part)));
         var reviewLabel = text.Get("AI 复盘", "AI review");
         var reviewWidth = ReviewEncounter is null ? 0 : DactUi.ButtonWidth(reviewLabel, ButtonKind.Primary, "sparkle");
+        var uploadLabel = text.Get("上传Logs", "Upload logs");
+        var uploadWidth = DactUi.ButtonWidth(uploadLabel, ButtonKind.Secondary, "upload");
         var top = ImGui.GetCursorPos();
         var available = ImGui.GetContentRegionAvail().X;
         ImGui.BeginGroup();
         using (DactUi.Gap(2))
         {
-            DactUi.Text(DactUi.Fit(title, available - reviewWidth - 12 * s), size: DactFonts.H2);
-            DactUi.Wrapped(sub, DactUi.HintColor, DactFonts.Small, available - reviewWidth - 12 * s);
+            DactUi.Text(DactUi.Fit(title, available - reviewWidth - uploadWidth - 24 * s), size: DactFonts.H2);
+            DactUi.Wrapped(sub, DactUi.HintColor, DactFonts.Small, available - reviewWidth - uploadWidth - 24 * s);
         }
         ImGui.EndGroup();
         if (ReviewEncounter is { } review)
         {
             var after = ImGui.GetCursorPos();
-            ImGui.SetCursorPos(new Vector2(top.X + available - reviewWidth, top.Y + (ImGui.GetItemRectSize().Y - 30 * s) * .5f));
+            ImGui.SetCursorPos(new Vector2(top.X + available - reviewWidth, top.Y + 2 * s));
             if (DactUi.Button(reviewLabel + "##history-review", ButtonKind.Primary, "sparkle")) review(encounter);
             ImGui.SetCursorPos(after);
         }
+        var uploadAfter = ImGui.GetCursorPos();
+        ImGui.SetCursorPos(new Vector2(top.X + available - reviewWidth - uploadWidth, top.Y + 2 * s));
+        if (DactUi.Button(uploadLabel + "##history-upload-fight", ButtonKind.Secondary, "upload") &&
+            historyUploadTask is null)
+        {
+            if (!fflogsUploadService.IsLoggedIn)
+                historyUploadStatus = text.Get("请先在 FFLogs 设置中登录。", "Sign in to FFLogs in the FFLogs settings first.");
+            else
+                historyUploadTask = UploadHistoryEncounterAsync(encounter);
+        }
+        ImGui.SetCursorPos(uploadAfter);
+        if (historyUploadTask is { IsCompleted: true } completed)
+        {
+            historyUploadTask = null;
+            historyUploadStatus = completed.IsCompletedSuccessfully
+                ? text.Format($"上传完成：{completed.Result}", $"Upload complete: {completed.Result}")
+                : text.Format($"上传失败：{completed.Exception?.GetBaseException().Message}",
+                    $"Upload failed: {completed.Exception?.GetBaseException().Message}");
+        }
+        if (!string.IsNullOrWhiteSpace(historyUploadStatus)) DactUi.Hint(historyUploadStatus);
 
         var players = encounter.Combatants.Count(static combatant => !MeterService.IsLimitBreak(combatant));
         var damageSeconds = Math.Max(1, encounter.EffectiveDuration.TotalSeconds);
@@ -331,6 +357,15 @@ public sealed partial class ControlCenterWindow
         ImGui.EndChild();
         ImGui.PopStyleColor();
         ImGui.PopStyleVar();
+    }
+
+    private async Task<string> UploadHistoryEncounterAsync(Encounter encounter)
+    {
+        var chinese = getGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese;
+        return await fflogsUploadService.UploadEncounterAsync(
+            getCombatLogDirectory(), chinese, encounter.StartTime.ToUnixTimeMilliseconds(),
+            configuration.Fflogs.UploadVisibility, configuration.Fflogs.UploadRegion,
+            configuration.Fflogs.UploadGuildId, configuration.Fflogs.UploadDescription).ConfigureAwait(false);
     }
 
     private static string FormatCompact(double value)

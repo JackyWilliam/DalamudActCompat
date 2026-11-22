@@ -32,6 +32,7 @@ public sealed class PluginPaths
         CloudCredentialFile = Path.Combine(ConfigDirectory, "cloud-account.dat");
         AiKeyFile = Path.Combine(ConfigDirectory, "ai-key.dat");
         AiKeyDirectory = Path.Combine(ConfigDirectory, "ai-keys");
+        FflogsUploadCredentialFile = Path.Combine(ConfigDirectory, "fflogs-upload.dat");
         CloudDeviceFile = Path.Combine(ConfigDirectory, "cloud-device.dat");
         CloudBanFile = Path.Combine(ConfigDirectory, "cloud-ban.dat");
         CloudRollbackDirectory = Path.Combine(
@@ -77,6 +78,8 @@ public sealed class PluginPaths
     public string AiKeyFile { get; }
 
     public string AiKeyDirectory { get; }
+
+    public string FflogsUploadCredentialFile { get; }
 
     public string CloudDeviceFile { get; }
 
