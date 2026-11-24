@@ -13,12 +13,27 @@ Windows Notification Center delivery uses Microsoft.Toolkit.Uwp.Notifications
 7.1.3 from the Windows Community Toolkit. It is licensed under MIT; its license
 text is included as `LICENSES/WindowsCommunityToolkit-MIT.md`.
 
-The Host uses Microsoft's ClearScript Core/V8 managed bindings 7.5.0 to support
-user-imported ACTLogsUploader packages under modern .NET. ClearScript is licensed
-under MIT; the complete upstream notice is included as `LICENSES/ClearScript-LICENSE.txt`.
+The Host uses Microsoft's ClearScript Core/V8 managed bindings 7.5.0 for FFLogs
+log upload and to support user-imported ACTLogsUploader packages under modern
+.NET. ClearScript is licensed under MIT; the complete upstream notice, which
+covers V8 and ICU as well, is included as `LICENSES/ClearScript-LICENSE.txt`.
 Source: <https://github.com/microsoft/ClearScript/tree/7.5.0>.
-ACTLogsUploader, the Titan tool (`ACT.JSB_5`), and their native V8/ICU companions
-are not bundled or downloaded by DACT; users supply those files themselves.
+DACT does not bundle the native V8 library or its ICU data. The first FFLogs
+parse or upload downloads Microsoft's own packages
+`Microsoft.ClearScript.V8.Native.win-x64` and `Microsoft.ClearScript.V8.ICUData`
+7.5.0 from NuGet and accepts only the archives whose hashes are pinned in the
+source. The ACTLogsUploader plugin and the Titan tool (`ACT.JSB_5`) are not
+bundled or downloaded by DACT; users supply those files themselves, including
+the V8/ICU files of an imported ACTLogsUploader package.
+
+The FFLogs upload transport and parser integration under
+`src/DalamudActCompat.Host/FflogsUpload` are adapted from
+[ACTLogsUploader](https://github.com/zhui-zi/ACTLogsUploader) by Keita, licensed
+under MIT. ACTLogsUploader in turn includes code derived from
+[FFLogsUploader](https://github.com/Robert5204/FFLogsUploader) (MIT). The license
+text and upstream notice are included as `LICENSES/ACTLogsUploader-MIT.txt`.
+The FF Logs parser script itself is not part of DACT: the helper downloads it
+from the FF Logs site the player signed in to and runs it locally.
 
 The optional AI assistant uses the official Anthropic C# SDK 13.6.0
 (Copyright 2023 Anthropic, PBC), licensed under Apache-2.0; its license text is

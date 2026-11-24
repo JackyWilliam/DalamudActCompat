@@ -69,7 +69,7 @@ The question-mark button in the header opens the complete in-game guide. It supp
 
 Starting with 1.0, Friends lives in the Control Center sidebar: find accounts, handle friend requests, and open chats, which can also be popped out into their own windows. The status popup controls presence and optional duty sharing. Notification settings provide independent bubble and sound switches, position and background opacity controls, and four sounds with previews. Each pair of friends retains the latest 20 history messages and latest three pending offline messages across both participants. Friend requests are separate from registration invitation codes.
 
-> Open FFLogs upload logs only opens the local Network log directory and copies its path. It does not upload automatically. Diagnostic logs are for troubleshooting and do not replace combat logs.
+> After signing in with your FFLogs website account, DACT can upload Network logs itself: the latest log, selected fights from it, a live upload, or a single pull from the encounter history. Parsing and uploading run in a helper process outside the game; the first use downloads Microsoft's official V8 runtime from NuGet (about 15 MB, verified by hash). Open FFLogs upload logs still opens the local Network log directory and copies its path for manual uploads. Diagnostic logs are for troubleshooting and do not replace combat logs.
 
 ## Interface preview
 

@@ -122,6 +122,33 @@ public sealed class ResourcePackManager : IDisposable
         }
     }
 
+    // For archives DACT does not publish itself (the FFLogs parser engine is Microsoft's own NuGet
+    // package): the entry is pinned in code instead of read from this version's manifest. The
+    // pinned archive is the only acceptable content, so there is neither a local directory to
+    // migrate nor another version to fall back to; and because the pin does not change between
+    // DACT versions, the verified cache is reused across updates.
+    public async Task<string> ResolvePinnedAsync(
+        ResourcePackEntry entry,
+        CancellationToken cancellationToken,
+        IProgress<ResourcePackDownloadProgress>? progress = null)
+    {
+        ValidateEntry(entry);
+        var exact = GetContentDirectory(entry);
+        if (IsInstalledPackValid(entry, exact))
+        {
+            return Path.Combine(exact, entry.ContentDirectory);
+        }
+
+        await using var installLock = await AcquireInstallLockAsync(entry.Id, cancellationToken)
+            .ConfigureAwait(false);
+        if (!IsInstalledPackValid(entry, exact))
+        {
+            await DownloadAndInstallAsync(entry, cancellationToken, progress).ConfigureAwait(false);
+        }
+
+        return Path.Combine(exact, entry.ContentDirectory);
+    }
+
     public bool TryResolveAvailableDirectory(
         string packId,
         string localDirectoryName,

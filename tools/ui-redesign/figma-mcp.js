@@ -294,9 +294,21 @@ board.name = ${JSON.stringify(it.name)}; board.x = ${it.x}; board.y = 100;
 sec.resizeWithoutConstraints(Math.max(sec.width, ${it.x} + board.width + 60), Math.max(sec.height, board.height + 160));
 results.push({ board: ${JSON.stringify(it.name)}, id: board.id, w: board.width, h: board.height });
 }`);
+  // The script reaches Figma retyped through the MCP call, tens of thousands of characters of
+  // dense JSON. A changed character there would draw a subtly wrong board, so the payload carries
+  // its own hash and the script stops before creating anything when it no longer matches.
+  const sum = `${hash(dict.join(SEP))}/${hash(texts.join(SEP))}`;
   return prelude(items[0].target.page, false) +
     `const PACK_D = String.raw\`${dict.join(SEP)}\`.split("${SEP}");\nconst PACK_T = String.raw\`${texts.join(SEP)}\`.split("${SEP}");\n` +
+    `const PACK_H = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };\n` +
+    `if (\`\${PACK_H(PACK_D.join("${SEP}"))}/\${PACK_H(PACK_T.join("${SEP}"))}\` !== "${sum}") throw new Error("画板数据在传输中被改动，未写入任何内容");\n` +
     `const UNPACK = s => s.replace(${TOKEN}, (_, i) => UNPACK(PACK_D[+i]));\nconst results = [];\n${blocks.join("\n")}\nreturn { results, createdIds: created };\n`;
+}
+// FNV-1a over UTF-16 code units, the same loop the generated script runs in Figma.
+function hash(s) {
+  let h = 2166136261;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  return h >>> 0;
 }
 const packs = [];
 for (const it of packItems) {

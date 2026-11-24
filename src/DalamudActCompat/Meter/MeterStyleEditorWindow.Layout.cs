@@ -15,7 +15,7 @@ public sealed partial class MeterStyleEditorWindow
     // Set by the plugin: feedback and help open in the control center.
     internal Action? OpenFeedback { get; set; }
     internal Action? OpenHelp { get; set; }
-    internal Action? OpenMeterSettings { get; set; }
+    internal Action? OpenFflogsSettings { get; set; }
 
     private const string ExitDialog = "##meter-editor-exit";
     private int propertiesTab;
@@ -418,7 +418,7 @@ public sealed partial class MeterStyleEditorWindow
         DactUi.DrawText(draw, min + new Vector2(60 * s, 0), rowHeight, DactUi.Fit(label, width - 66 * s - tagWidth), palette.Text with { W = alpha });
         if (tag is { } pill) DactUi.DrawPill(draw, new Vector2(min.X + width - tagWidth, min.Y + 4 * s), pill.Item1, pill.Item2, dot: false);
         if (!canEnable && slot.Metric == MeterSlotMetric.Fflogs && rowHovered)
-            DactUi.Tooltip(text.Get("请先在战斗统计页启用 FFLogs 在线估算。", "Enable FFLogs online estimates on Combat Meter first."));
+            DactUi.Tooltip(text.Get("请先在 FFLogs 页启用 FFLogs 在线估算。", "Enable FFLogs online estimates on the FFLogs page first."));
         ImGui.SetCursorScreenPos(min + new Vector2(0, rowHeight));
         ImGui.Dummy(new Vector2(width, 0));
         return changed;
@@ -710,9 +710,9 @@ public sealed partial class MeterStyleEditorWindow
         var changed = false;
         if (!canUse && slot.Metric == MeterSlotMetric.Fflogs)
         {
-            DactUi.Wrapped(text.Get("先在战斗统计页启用 FFLogs 在线估算，才能打开这个列。原有配置会保留。",
-                "Enable FFLogs online estimates on Combat Meter before showing this column. Its saved configuration is preserved."), DactUi.HintColor, DactFonts.Small, width);
-            if (OpenMeterSettings is { } open && DactUi.Button(text.Get("去战斗统计页启用", "Enable on Combat Meter") + "##slot-fflogs-open", width: width)) open();
+            DactUi.Wrapped(text.Get("先在 FFLogs 页启用 FFLogs 在线估算，才能打开这个列。原有配置会保留。",
+                "Enable FFLogs online estimates on the FFLogs page before showing this column. Its saved configuration is preserved."), DactUi.HintColor, DactFonts.Small, width);
+            if (OpenFflogsSettings is { } open && DactUi.Button(text.Get("去 FFLogs 页启用", "Enable on the FFLogs page") + "##slot-fflogs-open", width: width)) open();
             return false;
         }
         if (slot.Metric == MeterSlotMetric.PlayerIdentity)

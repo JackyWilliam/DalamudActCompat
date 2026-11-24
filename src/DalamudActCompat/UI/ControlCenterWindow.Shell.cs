@@ -212,6 +212,7 @@ public sealed partial class ControlCenterWindow
             new NavEntry(Page.Overview, "home", text.Get("主页", "Home")),
             new NavEntry(Page.Meter, "meter", text.Get("战斗统计", "Combat Meter")),
             new NavEntry(Page.History, "history", text.Get("战斗记录", "Encounter history")),
+            new NavEntry(Page.Fflogs, "fflogs", "FFLogs"),
             new NavEntry(Page.Overlays, "layers", text.Get("悬浮窗", "Overlays")),
             new NavEntry(Page.Extensions, "plug", text.Get("扩展", "Extensions")),
             friends is null ? null : new NavEntry(Page.Friends, "users", text.Get("好友", "Friends"), Badge: unread),

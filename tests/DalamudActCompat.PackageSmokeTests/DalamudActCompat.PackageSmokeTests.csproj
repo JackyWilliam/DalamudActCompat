@@ -20,6 +20,15 @@
     <Content Include="Fixtures/PictoCleanupScopes.xml" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/PictoOnline*.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures/U7bP1Drawings.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Players download these two official packages on demand (FflogsUploadEngineFiles). The
+         FFLogs upload smoke test checks the pinned hashes against the restored archives and runs
+         the real V8 engine from them; nothing here reaches the plugin's own output. -->
+    <PackageReference Include="Microsoft.ClearScript.V8.Native.win-x64" Version="7.5.0" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <PackageReference Include="Microsoft.ClearScript.V8.ICUData" Version="7.5.0" ExcludeAssets="all" PrivateAssets="all" GeneratePathProperty="true" />
+    <Content Include="$(PkgMicrosoft_ClearScript_V8_Native_win-x64)\microsoft.clearscript.v8.native.win-x64.7.5.0.nupkg"
+             Link="FflogsEngine/microsoft.clearscript.v8.native.win-x64.7.5.0.nupkg" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(PkgMicrosoft_ClearScript_V8_ICUData)\microsoft.clearscript.v8.icudata.7.5.0.nupkg"
+             Link="FflogsEngine/microsoft.clearscript.v8.icudata.7.5.0.nupkg" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="..\..\src\DalamudActCompat\DalamudActCompat.csproj" />
     <Reference Include="Dalamud">
       <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>

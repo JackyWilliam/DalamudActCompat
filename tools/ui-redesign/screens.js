@@ -10,7 +10,7 @@ const skins = require("./skins");
 
 const WIDTH = 920, HEIGHT = 640;
 const NAV = [
-  ["home", "home", "主页"], ["meter", "meter", "战斗统计"], ["history", "history", "战斗记录"], ["overlays", "layers", "悬浮窗"],
+  ["home", "home", "主页"], ["meter", "meter", "战斗统计"], ["history", "history", "战斗记录"], ["fflogs", "fflogs", "FFLogs"], ["overlays", "layers", "悬浮窗"],
   ["extensions", "plug", "扩展"], ["friends", "users", "好友"], ["ai", "sparkle", "AI 助手"],
   null,
   ["cloud", "cloud", "账号与云同步"], ["settings", "gear", "设置"],
@@ -864,6 +864,7 @@ const skinManager = shell("settings", [
 const helpBoards = require("./help")({ navItem, pageHeader });
 const featureBoards = require("./features")({ shell, pageHeader, statTile, homeContent });
 const noticeBoards = require("./notices")();
+const fflogsBoards = require("./fflogs")({ shell, pageHeader });
 
 module.exports = {
   title: "DACT 1.0 控制中心改版 · 草稿 v1",
@@ -913,5 +914,6 @@ module.exports = {
     { name: "09 使用帮助", screens: helpBoards },
     { name: "12 1.0 新功能", screens: featureBoards },
     { name: "13 三方扩展声明", screens: noticeBoards },
+    { name: "14 FFLogs 页面与日志上传", screens: fflogsBoards },
   ],
 };

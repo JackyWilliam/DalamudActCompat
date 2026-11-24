@@ -58,11 +58,17 @@ internal static partial class FriendsUiSmokeTests
         var defaults = JsonConvert.DeserializeObject<PluginConfiguration>("{}")!;
         Check(defaults.FriendNotificationsEnabled && defaults.FriendNotificationSoundEnabled && !defaults.FriendNotificationsOnRight && defaults.FriendNotificationSound == 0,
             "Old configurations lost notification defaults.");
+        // A file written before the volume setting existed must sound exactly as it did.
+        Check(defaults.FriendNotificationSoundVolume == 100, "Old configurations did not keep the notification sound at full volume.");
         defaults.FriendNotificationsEnabled = false; defaults.FriendNotificationSoundEnabled = false; defaults.FriendNotificationsOnRight = true;
-        defaults.FriendNotificationBackgroundTransparency = 80; defaults.FriendNotificationSound = 3;
+        defaults.FriendNotificationBackgroundTransparency = 80; defaults.FriendNotificationSound = 3; defaults.FriendNotificationSoundVolume = 35;
         var saved = JsonConvert.DeserializeObject<PluginConfiguration>(JsonConvert.SerializeObject(defaults))!;
         Check(!saved.FriendNotificationsEnabled && !saved.FriendNotificationSoundEnabled && saved.FriendNotificationsOnRight &&
-            saved.FriendNotificationBackgroundTransparency == 80 && saved.FriendNotificationSound == 3, "Notification preferences did not survive a cold config roundtrip.");
+            saved.FriendNotificationBackgroundTransparency == 80 && saved.FriendNotificationSound == 3 && saved.FriendNotificationSoundVolume == 35,
+            "Notification preferences did not survive a cold config roundtrip.");
+        Check(FriendsNotificationSound.Gain(100) == 1f && FriendsNotificationSound.Gain(50) == 0.5f && FriendsNotificationSound.Gain(0) == 0f &&
+            FriendsNotificationSound.Gain(250) == 1f && FriendsNotificationSound.Gain(-5) == 0f,
+            "Notification volume must map linearly to gain and never exceed the file's own level.");
         var hashes = new HashSet<string>();
         for (var sound = 1; sound <= 4; sound++)
         {

@@ -41,12 +41,6 @@ public sealed partial class ControlCenterWindow
     internal ProgressionStore? Progression { get; set; }
 
     // Opens the page from commands (/actcompat history, logs) and the home quick action.
-    public void ShowMeterPage()
-    {
-        selectedPage = Page.Meter;
-        ShowAnimated();
-    }
-
     public void OpenHistory(int tab = 0)
     {
         selectedPage = Page.History;
@@ -280,22 +274,31 @@ public sealed partial class ControlCenterWindow
         }.Where(static part => !string.IsNullOrEmpty(part)));
         var reviewLabel = text.Get("AI 复盘", "AI review");
         var reviewWidth = ReviewEncounter is null ? 0 : DactUi.ButtonWidth(reviewLabel, ButtonKind.Primary, "sparkle");
+        var uploadLabel = text.Get("上传到 FFLogs", "Upload to FFLogs");
+        var uploadWidth = DactUi.ButtonWidth(uploadLabel, ButtonKind.Secondary, "upload");
         var top = ImGui.GetCursorPos();
         var available = ImGui.GetContentRegionAvail().X;
         ImGui.BeginGroup();
         using (DactUi.Gap(2))
         {
-            DactUi.Text(DactUi.Fit(title, available - reviewWidth - 12 * s), size: DactFonts.H2);
-            DactUi.Wrapped(sub, DactUi.HintColor, DactFonts.Small, available - reviewWidth - 12 * s);
+            DactUi.Text(DactUi.Fit(title, available - reviewWidth - uploadWidth - 24 * s), size: DactFonts.H2);
+            DactUi.Wrapped(sub, DactUi.HintColor, DactFonts.Small, available - reviewWidth - uploadWidth - 24 * s);
         }
         ImGui.EndGroup();
+        // Both buttons sit on the vertical middle of the title block, right-aligned.
+        var buttonTop = top.Y + (ImGui.GetItemRectSize().Y - 30 * s) * .5f;
+        var after = ImGui.GetCursorPos();
         if (ReviewEncounter is { } review)
         {
-            var after = ImGui.GetCursorPos();
-            ImGui.SetCursorPos(new Vector2(top.X + available - reviewWidth, top.Y + (ImGui.GetItemRectSize().Y - 30 * s) * .5f));
+            ImGui.SetCursorPos(new Vector2(top.X + available - reviewWidth, buttonTop));
             if (DactUi.Button(reviewLabel + "##history-review", ButtonKind.Primary, "sparkle")) review(encounter);
-            ImGui.SetCursorPos(after);
         }
+        var uploading = historyUploadTask is { IsCompleted: false };
+        ImGui.SetCursorPos(new Vector2(top.X + available - reviewWidth - (reviewWidth > 0 ? 12 * s : 0) - uploadWidth, buttonTop));
+        if (DactUi.Button(uploadLabel + "##history-upload-fight", ButtonKind.Secondary, "upload", disabled: uploading) && !uploading)
+            StartHistoryUpload(encounter);
+        ImGui.SetCursorPos(after);
+        DrawHistoryUploadStatus(encounter);
 
         var players = encounter.Combatants.Count(static combatant => !MeterService.IsLimitBreak(combatant));
         var damageSeconds = Math.Max(1, encounter.EffectiveDuration.TotalSeconds);

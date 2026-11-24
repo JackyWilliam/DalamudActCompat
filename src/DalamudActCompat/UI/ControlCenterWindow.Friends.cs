@@ -89,6 +89,18 @@ public sealed partial class ControlCenterWindow
             }
             Dalamud.Bindings.ImGui.ImGui.SameLine(0, 8 * DactUi.S);
             if (DactUi.Button(previewLabel + "##friend-sound-preview")) PreviewFriendNotificationSound?.Invoke(selected);
+            DactUi.EndField();
+            // Dragging is silent like choosing a sound is: only 试听 plays, at the value shown here.
+            var volume = Math.Clamp(configuration.FriendNotificationSoundVolume, 0, 100);
+            DactUi.BeginField(text.Get("音量", "Volume"));
+            ImGuiDisabled(!sound, () =>
+            {
+                if (DactUi.SliderInt("##friend-sound-volume", ref volume, 0, 100, $"{volume}%"))
+                {
+                    configuration.FriendNotificationSoundVolume = volume;
+                    changed = true;
+                }
+            });
             DactUi.EndField(text.Get("关闭只停止提示，好友消息和未读数照常接收。", "Turning alerts off keeps messages and unread counts working."));
             DactUi.EndCard();
         }

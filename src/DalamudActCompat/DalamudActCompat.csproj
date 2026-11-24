@@ -46,6 +46,8 @@
     <Content Include="../../vendor/ThirdParty/dnlib-LICENSE.txt" Link="LICENSES/dnlib-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/WindowsCommunityToolkit-LICENSE.md" Link="LICENSES/WindowsCommunityToolkit-MIT.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/ClearScript-LICENSE.txt" Link="LICENSES/ClearScript-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The Host's FFLogs upload code is adapted from ACTLogsUploader (THIRD_PARTY_NOTICES.md). -->
+    <Content Include="../../vendor/ThirdParty/ACTLogsUploader-LICENSE.txt" Link="LICENSES/ACTLogsUploader-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/Anthropic-SDK-LICENSE.txt" Link="LICENSES/Anthropic-SDK-Apache-2.0.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/dotnet-MIT.txt" Link="LICENSES/dotnet-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/xivanalysis-LICENSE.txt" Link="LICENSES/xivanalysis-MIT.txt" CopyToOutputDirectory="PreserveNewest" />

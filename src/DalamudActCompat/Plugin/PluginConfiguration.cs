@@ -55,6 +55,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public bool FriendNotificationsEnabled { get; set; } = true;
     public bool FriendNotificationSoundEnabled { get; set; } = true;
     public int FriendNotificationSound { get; set; }
+    // Percent of the sound file's own level. 100 is what every install heard before the setting
+    // existed, so files without the field keep their loudness.
+    public int FriendNotificationSoundVolume { get; set; } = 100;
     public bool FriendNotificationsOnRight { get; set; }
     public int FriendNotificationBackgroundTransparency { get; set; } = 25;
 

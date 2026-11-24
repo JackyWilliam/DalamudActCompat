@@ -9,6 +9,7 @@ using DalamudActCompat.Compatibility.Cactbot;
 using DalamudActCompat.Core.Interfaces;
 using DalamudActCompat.Core.Models;
 using DalamudActCompat.Fflogs;
+using DalamudActCompat.Fflogs.Upload;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Logging;
@@ -48,6 +49,9 @@ public sealed partial class ControlCenterWindow : Window
         Ai,
         Cloud,
         Diagnostics,
+        // New pages go at the end: the hidden-skin discovery counts visits by page number (the first
+        // six unlock a skin, see VisitPage). The order in the rail comes from NavigationEntries.
+        Fflogs,
     }
 
     private enum CloudAuthenticationPage
@@ -95,6 +99,7 @@ public sealed partial class ControlCenterWindow : Window
     private readonly PluginLogger logger;
     private readonly UiText text;
     private readonly FflogsEstimateService fflogsEstimateService;
+    private readonly FflogsUploadService fflogsUploadService;
     private readonly CombatQualitySnapshot? combatQualitySnapshot;
     private readonly Func<Encounter?> getCurrentEncounter;
     private readonly ISharedImmediateTexture logoTexture;
@@ -200,6 +205,7 @@ public sealed partial class ControlCenterWindow : Window
         PluginLogger logger,
         UiText text,
         FflogsEstimateService fflogsEstimateService,
+        FflogsUploadService fflogsUploadService,
         CombatQualitySnapshot? combatQualitySnapshot,
         Func<Encounter?> getCurrentEncounter,
         ISharedImmediateTexture logoTexture,
@@ -257,6 +263,7 @@ public sealed partial class ControlCenterWindow : Window
         this.logger = logger;
         this.text = text;
         this.fflogsEstimateService = fflogsEstimateService;
+        this.fflogsUploadService = fflogsUploadService;
         this.combatQualitySnapshot = combatQualitySnapshot;
         this.getCurrentEncounter = getCurrentEncounter;
         this.logoTexture = logoTexture;
@@ -493,6 +500,7 @@ public sealed partial class ControlCenterWindow : Window
             // 好友 needs a signed-in account; its sub-page always reopens on the friend list.
             if (selectedPage == Page.Friends && (Friends is null || !cloudSnapshot.CanUseDact)) selectedPage = Page.Overview;
             if (selectedPage != Page.Friends) friendNotificationsPage = false;
+            if (selectedPage != Page.Fflogs) fflogsUploadSettingsPage = false;
             if (selectedPage != Page.Diagnostics) scenesPage = false;
             DrawShell(cloudSnapshot, () =>
             {
@@ -502,6 +510,7 @@ public sealed partial class ControlCenterWindow : Window
                     Page.Overview => DrawOverview(),
                     Page.Meter => DrawMeter(),
                     Page.History => DrawHistoryPage(),
+                    Page.Fflogs => DrawFflogsPage(),
                     Page.Friends => DrawFriendsPage(),
                     Page.Ai => DrawAiPage(cloudSnapshot),
                     Page.Overlays => DrawOverlays(),
@@ -776,7 +785,8 @@ public sealed partial class ControlCenterWindow : Window
         }
     }
 
-    // 战斗统计 (screens.js meterScreen): the 榜单 and FFLogs cards side by side.
+    // 战斗统计 (tools/ui-redesign/fflogs.js, 战斗统计（FFLogs 移出后）): the template previews across
+    // the top, 显示 and 统计 below. The FFLogs card has its own page now.
     private bool DrawMeter()
     {
         var s = DactUi.S;
@@ -795,23 +805,141 @@ public sealed partial class ControlCenterWindow : Window
                 if (DactUi.Button(locateLabel + "##meter-locate", icon: "target")) openMeter();
             });
 
+        changed |= DrawMeterTemplateCard();
         if (DactUi.BeginGrid("meter-grid", 14))
         {
-            changed |= DrawMeterRankingCard();
+            changed |= DrawMeterDisplayCard();
             DactUi.NextColumn();
-            changed |= DrawFflogsSettings();
+            changed |= DrawMeterStatisticsCard();
+            DrawMeterFflogsPointer();
             DactUi.EndGrid();
         }
         return changed;
     }
 
-    private bool DrawMeterRankingCard()
+    // 榜单模板: one preview tile per template instead of a segmented control; 自定义布局… opens the
+    // style editor.
+    private bool DrawMeterTemplateCard()
     {
         var s = DactUi.S;
         var changed = false;
-        DactUi.BeginCard("meter-ranking", null);
+        DactUi.BeginCard("meter-template", text.Get("榜单模板", "Meter template"));
+        var kinds = Enum.GetValues<MeterWindowKind>();
+        var gap = 10 * s;
+        var tileWidth = (ImGui.GetContentRegionAvail().X - gap * (kinds.Length - 1)) / kinds.Length;
+        for (var index = 0; index < kinds.Length; index++)
+        {
+            if (index > 0) ImGui.SameLine(0, gap);
+            if (DrawMeterTemplateTile(kinds[index], tileWidth) && kinds[index] != configuration.Meter.ActiveWindowKind)
+            {
+                configuration.Meter.ActivateWindow(kinds[index]);
+                changed = true;
+            }
+        }
+
+        var customizeLabel = text.Get("自定义布局…", "Customize layout…");
+        var customizeWidth = DactUi.ButtonWidth(customizeLabel, icon: "edit");
+        var note = text.Get(
+            "一次只显示一个榜单；切换时保留各模板的位置、大小、锁定和槽位配置。",
+            "Only one meter is shown at a time; each template keeps its own position, size, lock, and slots.");
+        var start = ImGui.GetCursorScreenPos();
+        var width = ImGui.GetContentRegionAvail().X;
+        var noteWidth = width - customizeWidth - 10 * s;
+        // The note and the button share one row, each centred on the taller of the two.
+        float noteHeight;
+        using (DactFonts.Push(DactFonts.Small)) noteHeight = DactUi.WrapLines(note, noteWidth).Count * ImGui.GetTextLineHeight();
+        var rowHeight = Math.Max(noteHeight, 30 * s);
+        ImGui.SetCursorScreenPos(start + new Vector2(0, (rowHeight - noteHeight) * .5f));
+        DactUi.Wrapped(note, DactUi.HintColor, DactFonts.Small, noteWidth);
+        ImGui.SetCursorScreenPos(start + new Vector2(width - customizeWidth, (rowHeight - 30 * s) * .5f));
+        if (DactUi.Button(customizeLabel + "##meter-customize", icon: "edit")) openMeterStyleEditor();
+        ImGui.SetCursorScreenPos(new Vector2(start.X, start.Y + rowHeight));
+        ImGui.Dummy(new Vector2(width, 0));
+        DactUi.EndCard();
+        return changed;
+    }
+
+    // Healer rows of the 职能分栏 schematic. Role colours do not follow the skin.
+    private static readonly Vector4 TemplateHealerStrong = new(.3725f, .749f, .5608f, 1);
+    private static readonly Vector4 TemplateHealerSoft = new(.2353f, .4784f, .3529f, 1);
+
+    // One selectable template: a schematic of how that meter lays out its rows, its name, and a
+    // check on the active one. Returns true when clicked.
+    private bool DrawMeterTemplateTile(MeterWindowKind kind, float width)
+    {
+        var s = DactUi.S;
+        var palette = DactTheme.Palette;
+        var selected = kind == configuration.Meter.ActiveWindowKind;
+        // 6 padding + 72 preview + 6 gap + 18 name + 6 padding.
+        var size = new Vector2(width, 108 * s);
+        var start = ImGui.GetCursorScreenPos();
+        var clicked = ImGui.InvisibleButton($"##meter-template-{kind}", size);
+        var hovered = ImGui.IsItemHovered();
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddRectFilled(start, start + size, DactUi.U32(selected ? DactUi.AccentSoft : DactUi.Field), 8 * s);
+        draw.AddRect(start, start + size,
+            DactUi.U32(selected ? palette.Accent : hovered ? palette.Muted with { W = .45f } : DactUi.FieldBorder),
+            8 * s, ImDrawFlags.None, Math.Max(1, s));
+
+        var preview = start + new Vector2(6 * s);
+        var previewSize = new Vector2(width - 12 * s, 72 * s);
+        draw.AddRectFilled(preview, preview + previewSize, DactUi.U32(palette.Raised), 5 * s);
+        draw.AddRect(preview, preview + previewSize, DactUi.U32(DactUi.FieldBorder), 5 * s, ImDrawFlags.None, Math.Max(1, s));
+        // The schematics are measured for the 204 px preview of the design and stretch with the tile.
+        var unit = previewSize.X / 204f;
+        void Bar(float x, float y, float w, float h, Vector4 color, float radius = 2)
+            => draw.AddRectFilled(
+                preview + new Vector2(x * unit, y * s),
+                preview + new Vector2((x + w) * unit, (y + h) * s),
+                DactUi.U32(color), radius * s);
+        var strong = palette.Accent;
+        var medium = Vector4.Lerp(palette.Raised, palette.Accent, .62f) with { W = 1 };
+        var soft = Vector4.Lerp(palette.Raised, palette.Accent, .38f) with { W = 1 };
+        switch (kind)
+        {
+            case MeterWindowKind.Horizontal:
+                var cells = new[] { strong, medium, soft, palette.Hover, palette.Hover };
+                for (var index = 0; index < cells.Length; index++) Bar(10 + index * 38, 27, 34, 18, cells[index], 3);
+                break;
+            case MeterWindowKind.RoleSplit:
+                Bar(10, 14, 84, 8, strong);
+                Bar(10, 28, 68, 8, medium);
+                Bar(10, 42, 52, 8, soft);
+                Bar(102, 8, 1, 56, DactUi.DividerColor, 0);
+                Bar(112, 14, 80, 8, TemplateHealerStrong);
+                Bar(112, 28, 60, 8, TemplateHealerSoft);
+                break;
+            default:
+                Bar(10, 8, 184, 8, strong);
+                Bar(10, 21, 150, 8, medium);
+                Bar(10, 34, 120, 8, soft);
+                Bar(10, 47, 90, 8, palette.Hover);
+                Bar(10, 60, 64, 8, palette.Hover);
+                break;
+        }
+
+        var label = DactUi.Fit(MeterKindLabel(kind), width - 12 * s - (selected ? 18 * s : 0));
+        DactUi.DrawText(draw, start + new Vector2(6 * s, 84 * s), 18 * s, label, selected ? palette.Accent : palette.Text);
+        if (selected) DactIcons.Draw(draw, "check", start + new Vector2(width - 20 * s, 86 * s), 14 * s, palette.Accent);
+        if (hovered) ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        return clicked;
+    }
+
+    private bool DrawMeterDisplayCard()
+    {
+        DactUi.BeginCard("meter-display", text.Get("显示", "Display"));
+        var changed = MeterDisplayScopeSelector.DrawField(text, configuration);
+        changed |= DrawPlayerIdentityControls();
+        DactUi.EndCard();
+        return changed;
+    }
+
+    private bool DrawMeterStatisticsCard()
+    {
+        var changed = false;
+        DactUi.BeginCard("meter-stats", null);
         var resetLabel = text.Get("重置当前战斗…", "Reset current encounter…");
-        DactUi.CardTitleRow(text.Get("榜单", "Meter"), null, DactUi.ButtonWidth(resetLabel, ButtonKind.Danger, "reset"), () =>
+        DactUi.CardTitleRow(text.Get("统计", "Statistics"), null, DactUi.ButtonWidth(resetLabel, ButtonKind.Danger, "reset"), () =>
         {
             if (DactUi.Button(resetLabel + "##meter-reset", ButtonKind.Danger, "reset"))
             {
@@ -822,25 +950,6 @@ public sealed partial class ControlCenterWindow : Window
             DrawResetEncounterConfirmation();
         });
 
-        // 榜单模板 is a segmented control now (was a dropdown); 自定义… opens the style editor.
-        DactUi.BeginField(text.Get("榜单模板", "Meter template"));
-        var kinds = Enum.GetValues<MeterWindowKind>();
-        var kindIndex = Array.IndexOf(kinds, configuration.Meter.ActiveWindowKind);
-        var customizeLabel = text.Get("自定义…", "Customize…");
-        var segmentWidth = ImGui.GetContentRegionAvail().X - DactUi.ButtonWidth(customizeLabel) - 8 * s;
-        if (DactUi.Segmented("meter-template", kinds.Select(MeterKindLabel).ToArray(), ref kindIndex, segmentWidth) && kindIndex >= 0)
-        {
-            configuration.Meter.ActivateWindow(kinds[kindIndex]);
-            changed = true;
-        }
-        ImGui.SameLine(0, 8 * s);
-        ImGui.SetCursorPosY(ImGui.GetCursorPosY() + s);
-        if (DactUi.Button(customizeLabel + "##meter-customize")) openMeterStyleEditor();
-        DactUi.EndField(text.Get(
-            "一次只显示一个榜单；切换时保留各模板的位置、大小、锁定和槽位配置。",
-            "Only one meter is shown at a time; each template keeps its own position, size, lock, and slots."));
-
-        changed |= MeterDisplayScopeSelector.DrawField(text, configuration);
         changed |= EncounterResetSelector.DrawField(text, configuration);
 
         DactUi.BeginField(text.Get("刷新间隔", "Refresh interval"));
@@ -852,10 +961,31 @@ public sealed partial class ControlCenterWindow : Window
             changed = true;
         }
         DactUi.EndField();
-
-        changed |= DrawPlayerIdentityControls();
         DactUi.EndCard();
         return changed;
+    }
+
+    // Parse 预估 lived on this page through 1.0.0.11; one line tells returning players where it went.
+    private void DrawMeterFflogsPointer()
+    {
+        var s = DactUi.S;
+        var label = text.Get("前往 FFLogs", "Go to FFLogs");
+        var labelWidth = DactUi.ButtonWidth(label, ButtonKind.Ghost);
+        var start = ImGui.GetCursorScreenPos();
+        var width = ImGui.GetContentRegionAvail().X;
+        var size = new Vector2(width, 46 * s);
+        var draw = ImGui.GetWindowDrawList();
+        draw.AddRectFilled(start, start + size, DactUi.U32(DactUi.Field), 8 * s);
+        draw.AddRect(start, start + size, DactUi.U32(DactUi.FieldBorder), 8 * s, ImDrawFlags.None, Math.Max(1, s));
+        DactIcons.Draw(draw, "fflogs", start + new Vector2(12 * s, 16 * s), 14 * s, DactTheme.Palette.Muted);
+        var note = DactUi.Fit(
+            text.Get("Parse 预估已移到 FFLogs 页。", "Parse estimate moved to the FFLogs page."),
+            width - 34 * s - labelWidth - 20 * s);
+        DactUi.DrawText(draw, start + new Vector2(34 * s, 0), size.Y, note, DactUi.HintColor, DactFonts.Small);
+        ImGui.SetCursorScreenPos(start + new Vector2(width - labelWidth - 6 * s, 8 * s));
+        if (DactUi.Button(label + "##meter-go-fflogs", ButtonKind.Ghost)) selectedPage = Page.Fflogs;
+        ImGui.SetCursorScreenPos(new Vector2(start.X, start.Y + size.Y));
+        ImGui.Dummy(new Vector2(width, 0));
     }
 
     private string MeterKindLabel(MeterWindowKind kind) => kind switch
@@ -2886,7 +3016,7 @@ public sealed partial class ControlCenterWindow : Window
         var changed = false;
         var status = fflogsEstimateService.Status;
         DactUi.BeginCard("meter-fflogs", null);
-        DactUi.CardTitleRow(text.Get("FFLogs Parse 预估", "FFLogs Parse estimate"),
+        DactUi.CardTitleRow(text.Get("Parse 预估", "Parse estimate"),
             () => DactUi.Pill(FflogsStatusShort(status.State), FflogsStatusTone(status.State)));
         DactUi.Hint(text.Get(
             "用本场实际 DPS 对照 FFLogs 同职业、同副本、同分区的分布估算 Parse；缓存缺失时显示“--”。",
