@@ -9,10 +9,6 @@ available from `vendor/IINACT` and
 The release archive includes the applicable upstream license texts under
 `LICENSES/`. Copyright remains with the respective upstream authors.
 
-Windows Notification Center delivery uses Microsoft.Toolkit.Uwp.Notifications
-7.1.3 from the Windows Community Toolkit. It is licensed under MIT; its license
-text is included as `LICENSES/WindowsCommunityToolkit-MIT.md`.
-
 The Host uses Microsoft's ClearScript Core/V8 managed bindings 7.5.0 for FFLogs
 log upload and to support user-imported ACTLogsUploader packages under modern
 .NET. ClearScript is licensed under MIT; the complete upstream notice, which
@@ -35,18 +31,9 @@ text and upstream notice are included as `LICENSES/ACTLogsUploader-MIT.txt`.
 The FF Logs parser script itself is not part of DACT: the helper downloads it
 from the FF Logs site the player signed in to and runs it locally.
 
-The optional AI assistant uses the official Anthropic C# SDK 13.6.0
-(Copyright 2023 Anthropic, PBC), licensed under Apache-2.0; its license text is
-included as `LICENSES/Anthropic-SDK-Apache-2.0.txt`.
-Source: <https://github.com/anthropics/anthropic-sdk-csharp>.
-Its dependencies Microsoft.Extensions.AI.Abstractions 10.5.1
-(<https://github.com/dotnet/extensions>) and Microsoft.Extensions.ObjectPool
-10.0.1 (<https://github.com/dotnet/aspnetcore>) are licensed under MIT; the
-license text is included as `LICENSES/dotnet-MIT.txt`. The assistant is off by
-default and contacts only the provider and endpoint the user configures, with
-the user's own API key.
-
-The assistant's per-job fight review notes (`Ai/JobKnowledge/*.md`, embedded in
+The optional AI assistant contacts only the provider and endpoint the user
+configures, with the user's own API key, using .NET's built-in HTTP client.
+Its per-job fight review notes (`Ai/JobKnowledge/*.md`, embedded in
 `DalamudActCompat.dll`) adapt the rotation checks and advice of xivanalysis
 (Copyright (c) 2018 Saxon Landers & contributors), licensed under MIT; the
 license text is included as `LICENSES/xivanalysis-MIT.txt`.

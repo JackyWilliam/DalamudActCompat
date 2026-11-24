@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.IO.Pipes;
 using System.IO;
 using System.Collections.Concurrent;
+using System.Runtime.Loader;
 using System.Text.Json;
 using DalamudActCompat.Protocol;
 
@@ -11,6 +12,8 @@ internal static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        RegisterParentSharedAssemblyFallback();
+
         if (args.Contains(AiRelayProtocol.ModeArgument))
         {
             return await AiRelayServer.RunAsync(args).ConfigureAwait(false);
@@ -50,6 +53,47 @@ internal static class Program
             Console.Error.WriteLine(ex);
             return 1;
         }
+    }
+
+    private static void RegisterParentSharedAssemblyFallback()
+    {
+        // When launched directly from the packaged host/ folder (without CompatibilityHostAssets
+        // staging), resolve deduplicated read-only ACT/FFXIV assemblies from the parent Core dir.
+        AssemblyLoadContext.Default.Resolving += static (context, assemblyName) =>
+        {
+            if (string.IsNullOrWhiteSpace(assemblyName.Name))
+            {
+                return null;
+            }
+
+            var baseDir = AppContext.BaseDirectory.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar);
+            var parentDir = Directory.GetParent(baseDir)?.FullName;
+            if (string.IsNullOrWhiteSpace(parentDir))
+            {
+                return null;
+            }
+
+            var candidate = Path.Combine(parentDir, assemblyName.Name + ".dll");
+            if (!File.Exists(candidate))
+            {
+                return null;
+            }
+
+            try
+            {
+                return context.LoadFromAssemblyPath(candidate);
+            }
+            catch (BadImageFormatException)
+            {
+                return null;
+            }
+            catch (FileLoadException)
+            {
+                return null;
+            }
+        };
     }
 
     private static async Task RunPipeServerAsync(

@@ -1,6 +1,6 @@
 <Project Sdk="Dalamud.NET.Sdk/15.0.0">
   <PropertyGroup>
-    <TargetFramework>net10.0-windows10.0.17763.0</TargetFramework>
+    <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>DalamudActCompat</AssemblyName>
     <RootNamespace>DalamudActCompat</RootNamespace>
     <Version>1.0.1.0</Version>
@@ -20,7 +20,7 @@
     <MinimumDalamudVersion>15.0.0</MinimumDalamudVersion>
     <CanUnloadAsync>true</CanUnloadAsync>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <CompatibilityHostTargetFramework>net10.0-windows10.0.17763.0</CompatibilityHostTargetFramework>
+    <CompatibilityHostTargetFramework>net10.0-windows</CompatibilityHostTargetFramework>
     <SystemSpeechRuntimeImplementation>..\DalamudActCompat.Host\bin\$(Configuration)\$(CompatibilityHostTargetFramework)\runtimes\win\lib\net10.0\System.Speech.dll</SystemSpeechRuntimeImplementation>
   </PropertyGroup>
 
@@ -37,18 +37,14 @@
     <ProjectReference Include="../DalamudActCompat.Protocol/DalamudActCompat.Protocol.csproj" />
     <ProjectReference Include="../DalamudActCompat.ActRuntime/DalamudActCompat.ActRuntime.csproj" />
     <PackageReference Include="SharpCompress" Version="0.50.1" />
-    <!-- AI 助手 talks to Claude through the official SDK with the player's own key. -->
-    <PackageReference Include="Anthropic" Version="13.6.0" />
     <Content Include="../../vendor/IINACT/LICENSE" Link="LICENSES/IINACT-GPL-3.0.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/OverlayPlugin.Core/LICENSE.txt" Link="LICENSES/OverlayPlugin.Core-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/OverlayPlugin.Common/LICENSE.txt" Link="LICENSES/OverlayPlugin.Common-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/IINACT/machina/LICENSE.md" Link="LICENSES/Machina-LICENSE.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/dnlib-LICENSE.txt" Link="LICENSES/dnlib-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="../../vendor/ThirdParty/WindowsCommunityToolkit-LICENSE.md" Link="LICENSES/WindowsCommunityToolkit-MIT.md" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/ClearScript-LICENSE.txt" Link="LICENSES/ClearScript-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <!-- The Host's FFLogs upload code is adapted from ACTLogsUploader (THIRD_PARTY_NOTICES.md). -->
     <Content Include="../../vendor/ThirdParty/ACTLogsUploader-LICENSE.txt" Link="LICENSES/ACTLogsUploader-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="../../vendor/ThirdParty/Anthropic-SDK-LICENSE.txt" Link="LICENSES/Anthropic-SDK-Apache-2.0.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/dotnet-MIT.txt" Link="LICENSES/dotnet-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/ThirdParty/xivanalysis-LICENSE.txt" Link="LICENSES/xivanalysis-MIT.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../vendor/BundledActPlugins/**/*"
@@ -70,17 +66,20 @@
   <Target Name="CopyCompatibilityHost" BeforeTargets="DefaultDalamudPackagerDebug;DefaultDalamudPackagerRelease">
     <ItemGroup>
       <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.dll"
-                              Exclude="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/System.Speech.dll" />
+                              Exclude="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/System.Speech.dll;../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/Mono.Cecil.Pdb.dll;../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/Mono.Cecil.Mdb.dll;../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/Mono.Cecil.Rocks.dll;../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/Advanced Combat Tracker.dll;../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/FFXIV_ACT_Plugin*.dll" />
       <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.exe" />
       <CompatibilityHostFiles Include="../DalamudActCompat.Host/bin/$(Configuration)/$(CompatibilityHostTargetFramework)/*.json" />
       <CompatibilityHostFiles Include="$(SystemSpeechRuntimeImplementation)" />
     </ItemGroup>
+    <RemoveDir Directories="$(OutputPath)host" />
     <MakeDir Directories="$(OutputPath)host" />
     <Copy SourceFiles="@(CompatibilityHostFiles)" DestinationFolder="$(OutputPath)host" SkipUnchangedFiles="true" />
+    <Delete Files="$(OutputPath)DalamudActCompat.Host.exe" Condition="Exists('$(OutputPath)DalamudActCompat.Host.exe')" />
     <ItemGroup Condition="'$(Configuration)' == 'Release'">
       <ReleaseDebugSymbols Include="$(OutputPath)**/*.pdb" />
+      <ReleaseXmlDocs Include="$(OutputPath)Microsoft.Web.WebView2.*.xml" />
     </ItemGroup>
-    <Delete Files="@(ReleaseDebugSymbols)" Condition="'$(Configuration)' == 'Release'" />
+    <Delete Files="@(ReleaseDebugSymbols);@(ReleaseXmlDocs)" Condition="'$(Configuration)' == 'Release'" />
   </Target>
 
   <!-- DalamudPackager moves the output's images folder next to latest.zip (for plugin repos) and

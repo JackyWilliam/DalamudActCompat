@@ -73,69 +73,69 @@ jobs:
       - name: Run Release Package smoke
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.PackageSmokeTests.exe"
+          & "tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.PackageSmokeTests.exe"
 
       - name: Verify PostNamazu command semantics
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.PackageSmokeTests.exe" --postnamazu-command-only
+          & "tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.PackageSmokeTests.exe" --postnamazu-command-only
           if ($LASTEXITCODE -ne 0) { throw "PostNamazu command semantics regression." }
 
       - name: Run Host smoke
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
-            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.Host.exe" `
             "vendor/BundledActPlugins/triggernometry/Triggernometry.dll"
 
       - name: Run original Simulant compatibility smoke
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
             --simulant "$env:ACTCOMPAT_SIMULANT_DLL" "vendor/BundledActPlugins"
 
       - name: Run U7b initialization ordering regression
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
             --probe-triggernometry-u7b-ordering `
-            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.Host.exe" `
             "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "u7b-ordering-smoke")
           if ($LASTEXITCODE -ne 0) { throw "U7b initialization ordering regression." }
 
       - name: Run U7b tether knockback regression
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
             --probe-triggernometry-u7b-tether `
-            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.Host.exe" `
             "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "u7b-tether-smoke")
           if ($LASTEXITCODE -ne 0) { throw "U7b tether knockback regression." }
 
       - name: Run Triggernometry event timing regression
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
             --probe-triggernometry-timing `
-            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.Host.exe" `
             "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "triggernometry-timing-smoke")
           if ($LASTEXITCODE -ne 0) { throw "Triggernometry event timing regression." }
 
       - name: Run encounter drawing diagnostics regression
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
             --probe-drawing-diagnostics `
-            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.Host.exe" `
             "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "drawing-diagnostics-smoke")
           if ($LASTEXITCODE -ne 0) { throw "Encounter drawing diagnostics regression." }
 
       - name: Verify U7b clear-effect callback chain
         shell: pwsh
         run: |
-          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe" `
+          & "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe" `
             --probe-u7b-clear-effects `
-            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.Host.exe" `
+            "tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.Host.exe" `
             "vendor/BundledActPlugins" (Join-Path $env:RUNNER_TEMP "u7b-clear-effects-smoke")
           if ($LASTEXITCODE -ne 0) { throw "U7b clear-effect callback chain regression." }
 
