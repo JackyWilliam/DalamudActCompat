@@ -295,8 +295,9 @@ namespace DalamudActCompat.Host.FflogsUpload
 
             if (result == null)
                 throw new Exception("Upload did not produce a result.");
+            // Not a fault: the newest log simply has no fight yet, and no report was created for it.
             if (result.FightCount == 0)
-                throw new Exception("Parser produced no fights - nothing to upload.");
+                throw new FflogsUploadFailure(DalamudActCompat.Protocol.FflogsUploadProtocol.NoFights, "The log contains no fight to upload.");
             LastUploadFightCount = result.FightCount;
 
             UploadLog.Info($"Upload complete: {result.ReportCode}");

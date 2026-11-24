@@ -85,6 +85,15 @@ internal static class FflogsUploadSmokeTests
             Assert(Directory.GetFiles(Path.Combine(root, "parser-cache"), "*.js").Length == 1,
                 "The parser was not cached in the directory the game side chose.");
 
+            // Found with a real account: a log without a fight (a fresh login) created a report
+            // first and only then noticed there was nothing to put in it.
+            var quiet = SyntheticLog.WriteWithoutFights(Path.Combine(root, "quiet-logs"));
+            var created = site.Requests.Count(request => request.Path == "/desktop-client/create-report");
+            var nothing = await FailureAsync(() => service.UploadLatestAsync(quiet, Options));
+            Assert(nothing.Code == FflogsUploadProtocol.NoFights &&
+                   site.Requests.Count(request => request.Path == "/desktop-client/create-report") == created,
+                $"Uploading a log without fights failed as {nothing.Code} or created a report anyway.");
+
             var fights = await service.PrepareAsync(log.Directory);
             Assert(fights.Count == 2 && fights[0] is { Index: 0, Name: "Fight One" } && fights[1] is { Index: 1, Name: "Fight Two" } &&
                    fights[0].EndUnixMs == log.FirstEnd.ToUnixTimeMilliseconds() && fights[1].EndUnixMs == log.SecondEnd.ToUnixTimeMilliseconds(),
@@ -338,6 +347,18 @@ internal static class FflogsUploadSmokeTests
             Fight("Fight Two", "2", log.SecondStart, log.SecondEnd);
             File.WriteAllText(Path.Combine(directory, "Network_fixture.log"), string.Join("\n", lines) + "\n");
             return log;
+        }
+
+        // Lines the parser reads but that never start a fight; returns the directory.
+        public static string WriteWithoutFights(string directory)
+        {
+            System.IO.Directory.CreateDirectory(directory);
+            var origin = DateTimeOffset.FromUnixTimeSeconds(DateTimeOffset.UtcNow.ToUnixTimeSeconds()).AddMinutes(-5);
+            File.WriteAllText(Path.Combine(directory, "Network_quiet.log"), string.Join("\n",
+                Line("253", origin, "FFXIV_ACT_Plugin Version: fixture"),
+                Line("EV", origin.AddSeconds(5), "zone-in"),
+                Line("EV", origin.AddSeconds(9), "chat")) + "\n");
+            return directory;
         }
 
         private static string Line(string type, DateTimeOffset time, string text)

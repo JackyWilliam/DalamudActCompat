@@ -502,8 +502,21 @@ namespace DalamudActCompat.Host.FflogsUpload
             await StartParserAsync().ConfigureAwait(false);
             try
             {
-                var reportCode = await createReport(ParserVersion).ConfigureAwait(false);
-                SetReportCode(reportCode);
+                // The report is created when the first fight is ready to upload, the way live
+                // logging does it. Upstream created it before reading the log, which left an
+                // empty report on the player's account for every log without a fight (a fresh
+                // login, an evening of crafting).
+                string reportCode = null;
+                Func<string, FightData, int, long, long, Task> uploadFight = async (masterTable, fight, segmentId, startTime, endTime) =>
+                {
+                    if (reportCode == null)
+                    {
+                        reportCode = await createReport(ParserVersion).ConfigureAwait(false);
+                        SetReportCode(reportCode);
+                    }
+
+                    await onFightComplete(masterTable, fight, segmentId, startTime, endTime).ConfigureAwait(false);
+                };
 
                 var firstBatch = await LogFileHelper.ReadBatchSharedAsync(logPath, 0).ConfigureAwait(false);
                 foreach (var line in firstBatch.Lines)
@@ -528,7 +541,7 @@ namespace DalamudActCompat.Host.FflogsUpload
 
                     nextSegmentId = await DrainCompletedFightsAsync(
                         nextSegmentId,
-                        onFightComplete,
+                        uploadFight,
                         batch.EndOfFile,
                         "Manual").ConfigureAwait(false);
 
