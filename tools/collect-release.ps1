@@ -165,8 +165,12 @@ Expand-Archive -Path $destination -DestinationPath $validationDir -Force
 $packagedFiles = @(Get-ChildItem -LiteralPath $validationDir -Recurse -File)
 # These adapters accept user-supplied plugins; a local import must never become
 # an accidental redistribution through a stale build/output directory.
+# The licence notice for the upload code adapted from ACTLogsUploader is ours to ship (and is
+# required below); it only shares the name prefix with the plugin files this check is about.
+$adaptedCodeNotice = "LICENSES/ACTLogsUploader-MIT.txt"
 $manualOnlyFiles = @($packagedFiles | Where-Object {
-    $_.Name -match '^(ACTLogsUploader.*|ACT\.JSB_5\.dll|神兵科技\.dll|ClearScriptV8\.win-x64\.dll|ClearScript\.V8\.ICUData\.dll)$'
+    $_.Name -match '^(ACTLogsUploader.*|ACT\.JSB_5\.dll|神兵科技\.dll|ClearScriptV8\.win-x64\.dll|ClearScript\.V8\.ICUData\.dll)$' -and
+    ((Get-ChildRelativePath -BasePath $validationDir -ChildPath $_.FullName) -replace '\\', '/') -ne $adaptedCodeNotice
 })
 if ($manualOnlyFiles.Count -gt 0) {
     throw "Plugin ZIP contains manual-only extension files: $($manualOnlyFiles.Name -join ', ')"
