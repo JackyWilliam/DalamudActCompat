@@ -427,7 +427,9 @@ namespace DalamudActCompat.Host.FflogsUpload
                     {
                         message = "collect-fights",
                         id = 200 + raidIdx,
-                        pushFightIfNeeded = false,
+                        // Pass 2 filters lines to [raid.start, raid.end], so no subsequent zone change
+                        // or next pull arrives after the raid's final pull to flush it automatically.
+                        pushFightIfNeeded = true,
                         scanningOnly = false
                     });
 
