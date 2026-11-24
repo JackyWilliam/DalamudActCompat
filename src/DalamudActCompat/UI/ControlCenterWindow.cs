@@ -171,7 +171,6 @@ public sealed partial class ControlCenterWindow : Window
     private long visibilityTransitionStartedAt;
     private bool visibilityStylePushed;
     private long resetEncounterConfirmationExpiresAt;
-    private bool confirmFactoryReset;
     private string? factoryResetResult;
     private string? openedGenericPermissionKey;
     private ThirdPartyPluginInstallStatus? openedPluginFailureStatus;
@@ -2363,7 +2362,6 @@ public sealed partial class ControlCenterWindow : Window
 
     private void ClearCloudSecrets()
     {
-        cloudShowPassword = false;
         cloudResetPasswordStep = false;
         cloudPassword = string.Empty;
         cloudPasswordConfirmation = string.Empty;

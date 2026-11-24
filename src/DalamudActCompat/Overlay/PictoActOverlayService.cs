@@ -224,45 +224,67 @@ internal sealed partial class PictoActOverlayService : IDisposable
 
     internal void Draw()
     {
-        List<PictoActShape> fallbackShapes = [];
-        var now = DateTimeOffset.UtcNow;
+        List<PictoActShape>? fallbackShapes = null;
         lock (syncRoot)
         {
-            ProcessPending(now);
-            DrainNativeRemovals();
-            foreach (var expired in shapes
-                         .Where(pair => pair.Value.Shape.ExpiresAt <= now)
-                         .Select(pair => pair.Key)
-                         .ToArray())
+            if (shapes.Count == 0 && pendingCommands.Count == 0 && pendingNativeRemovals.Count == 0)
             {
-                QueueNativeRemovals(shapes[expired].NativeHandles);
-                shapes.Remove(expired);
+                return;
             }
 
-            // Expired drawings must not resolve vanished or invalid entities before
-            // cleanup: a failing refresh used to prevent its own expiry indefinitely.
-            if (now >= nextDynamicRefreshAt)
+            var now = DateTimeOffset.UtcNow;
+            if (pendingCommands.Count > 0)
             {
-                RefreshDynamicShapes();
-                // Upstream PictoACT samples moving entities at roughly 100 ms.
-                nextDynamicRefreshAt = now.AddMilliseconds(100);
+                ProcessPending(now);
+            }
+            DrainNativeRemovals();
+            if (shapes.Count > 0)
+            {
+                List<string>? expiredKeys = null;
+                foreach (var pair in shapes)
+                {
+                    if (pair.Value.Shape.ExpiresAt <= now)
+                    {
+                        (expiredKeys ??= []).Add(pair.Key);
+                    }
+                }
+                if (expiredKeys is not null)
+                {
+                    foreach (var expired in expiredKeys)
+                    {
+                        QueueNativeRemovals(shapes[expired].NativeHandles);
+                        shapes.Remove(expired);
+                    }
+                }
+
+                // Expired drawings must not resolve vanished or invalid entities before
+                // cleanup: a failing refresh used to prevent its own expiry indefinitely.
+                if (shapes.Count > 0 && now >= nextDynamicRefreshAt)
+                {
+                    RefreshDynamicShapes();
+                    // Upstream PictoACT samples moving entities at roughly 100 ms.
+                    nextDynamicRefreshAt = now.AddMilliseconds(100);
+                }
             }
 
             DrainNativeRemovals();
-            foreach (var stored in shapes.Values.Where(value =>
-                         !value.DynamicRefreshFailed && value.Shape.StartsAt <= now))
+            foreach (var stored in shapes.Values)
             {
+                if (stored.DynamicRefreshFailed || stored.Shape.StartsAt > now)
+                {
+                    continue;
+                }
                 ActivateOrUpdateNative(stored);
                 if (ShouldDrawScreenFallback(
                         stored.Shape.Kind,
                         nativeVfx is not null))
                 {
-                    fallbackShapes.Add(stored.Shape);
+                    (fallbackShapes ??= []).Add(stored.Shape);
                 }
             }
         }
 
-        if (fallbackShapes.Count == 0)
+        if (fallbackShapes is null || fallbackShapes.Count == 0)
         {
             return;
         }
@@ -288,6 +310,11 @@ internal sealed partial class PictoActOverlayService : IDisposable
     {
         lock (syncRoot)
         {
+            if (pendingCommands.Count == 0)
+            {
+                return;
+            }
+
             var due = pendingCommands
                 .Where(command => command.ExecuteAt <= now)
                 .OrderBy(command => command.ExecuteAt)

@@ -39,6 +39,9 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
     private nint deviceIdentity;
     private int requestCount;
     private bool disposed, failed;
+    private float cachedBlurSigma = -1f;
+    private int cachedBlurTapCount;
+    private readonly float[] cachedBlurTaps = new float[25 * 4];
 
     internal bool Ready => device != null && !failed && !disposed;
     internal int RenderedSurfaces { get; private set; }
@@ -219,28 +222,41 @@ internal sealed unsafe class LiquidGlassRenderer : IDisposable
         }
     }
 
-    private static void SetBlurKernel(ref Parameters parameters, float sigma)
+    private void SetBlurKernel(ref Parameters parameters, float sigma)
     {
         // Radius and weights are calculated in physical pixels. Scaling tap
         // spacing would reintroduce skipped texels at larger UI font scales.
         sigma = Math.Clamp(sigma, .1f, 8);
-        var radius = Math.Min(24, (int)MathF.Ceiling(sigma * 3 / 2) * 2);
-        float Weight(int offset) => MathF.Exp(-offset * offset / (2 * sigma * sigma));
-        var total = 1f;
-        for (var i = 1; i <= radius; i++) total += 2 * Weight(i);
-        fixed (float* taps = parameters.BlurTaps)
+        if (MathF.Abs(sigma - cachedBlurSigma) >= 0.001f)
         {
-            taps[0] = 0; taps[1] = 1 / total;
+            var radius = Math.Min(24, (int)MathF.Ceiling(sigma * 3 / 2) * 2);
+            var invTwoSigmaSq = 1f / (2 * sigma * sigma);
+            float Weight(int offset) => MathF.Exp(-offset * offset * invTwoSigmaSq);
+            var total = 1f;
+            for (var i = 1; i <= radius; i++) total += 2 * Weight(i);
+            var invTotal = 1f / total;
+            Array.Clear(cachedBlurTaps);
+            cachedBlurTaps[0] = 0;
+            cachedBlurTaps[1] = invTotal;
             var count = 1;
             for (var i = 1; i <= radius; i += 2)
             {
                 var a = Weight(i); var b = Weight(i + 1); var weight = a + b;
                 var offset = i + b / weight;
-                taps[count * 4] = offset; taps[count++ * 4 + 1] = weight / total;
-                taps[count * 4] = -offset; taps[count++ * 4 + 1] = weight / total;
+                var normWeight = weight * invTotal;
+                cachedBlurTaps[count * 4] = offset; cachedBlurTaps[count++ * 4 + 1] = normWeight;
+                cachedBlurTaps[count * 4] = -offset; cachedBlurTaps[count++ * 4 + 1] = normWeight;
             }
-            parameters.BlurPass = new(0, 0, count, 0);
+            cachedBlurSigma = sigma;
+            cachedBlurTapCount = count;
         }
+
+        fixed (float* src = cachedBlurTaps)
+        fixed (float* dst = parameters.BlurTaps)
+        {
+            Buffer.MemoryCopy(src, dst, 25 * 4 * sizeof(float), 25 * 4 * sizeof(float));
+        }
+        parameters.BlurPass = new(0, 0, cachedBlurTapCount, 0);
     }
 
     private void Initialize(nint handle)

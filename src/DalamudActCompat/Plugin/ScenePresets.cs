@@ -73,6 +73,10 @@ internal sealed class ScenePresetController
     private SceneKind? applied;
     private uint appliedTerritory;
     private bool applyRequested;
+    private bool hasDetected;
+    private uint lastDetectedTerritory;
+    private bool lastDetectedInDuty;
+    private uint lastDetectedConditionId;
 
     public ScenePresetController(PluginConfiguration configuration, IClientState clientState, ICondition condition, IDataManager data,
         Action<bool> setMeterVisible, Func<string, bool> openOverlay, Action<string> closeOverlay, Action save)
@@ -101,9 +105,17 @@ internal sealed class ScenePresetController
         var inDuty = condition[ConditionFlag.BoundByDuty];
         var game = GameMain.Instance();
         var conditionId = game == null ? 0u : game->CurrentContentFinderConditionId;
-        var (kind, name) = Detect(territory, inDuty, conditionId);
-        Current = kind;
-        CurrentName = name;
+        if (!hasDetected || territory != lastDetectedTerritory || inDuty != lastDetectedInDuty || conditionId != lastDetectedConditionId)
+        {
+            var (detectedKind, detectedName) = Detect(territory, inDuty, conditionId);
+            Current = detectedKind;
+            CurrentName = detectedName;
+            hasDetected = true;
+            lastDetectedTerritory = territory;
+            lastDetectedInDuty = inDuty;
+            lastDetectedConditionId = conditionId;
+        }
+        var kind = Current;
         var settings = configuration.Scenes;
         if (settings is null || !settings.Enabled)
         {

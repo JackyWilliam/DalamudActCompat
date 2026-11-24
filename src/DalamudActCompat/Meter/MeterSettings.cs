@@ -304,6 +304,7 @@ public sealed class MeterSettings
         return changed;
     }
 
+    [JsonIgnore]
     public MeterWindowKind ActiveWindowKind
         => HorizontalWindow.IsEnabled
             ? MeterWindowKind.Horizontal
@@ -311,6 +312,7 @@ public sealed class MeterSettings
                 ? MeterWindowKind.RoleSplit
                 : MeterWindowKind.Classic;
 
+    [JsonIgnore]
     public MeterWindowProfile ActiveWindowProfile
         => ActiveWindowKind switch
         {

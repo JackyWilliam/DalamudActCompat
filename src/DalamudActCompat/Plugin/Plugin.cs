@@ -83,13 +83,11 @@ public sealed class Plugin : IDalamudPlugin
     private readonly FflogsUploadService fflogsUploadService;
     private readonly ZoneNameLocalizer zoneNameLocalizer;
     private readonly EncounterModeStateProvider encounterModeStateProvider;
-    private readonly EncounterWindow encounterWindow;
     private readonly ControlCenterWindow settingsWindow;
     private readonly HelpWindow helpWindow;
     private readonly SearchWindow searchWindow;
     private readonly FeedbackWindow feedbackWindow;
     private readonly SearchHotkey searchHotkey;
-    private readonly SettingsWindow advancedSettingsWindow;
     private readonly StatusWindow statusWindow;
     private readonly LauncherWindow launcherWindow;
     private readonly CoreResourceDownloadWindow coreResourceDownloadWindow;
@@ -176,6 +174,9 @@ public sealed class Plugin : IDalamudPlugin
     private readonly HostEntityEpochClock hostEntityEpochClock = new();
     private DateTimeOffset nextHostEntitySnapshotFailureLogAt;
     private HostFfxivEntitySnapshot? hostEntitySnapshotBaseline;
+    private Dictionary<uint, HostFfxivCombatant>? hostEntityBaselineById;
+    private readonly Dictionary<uint, int> hostEntityPartyTypesBuffer = new(24);
+    private readonly HashSet<uint> hostEntitySeenIdsBuffer = new(256);
     private IReadOnlyList<ActPlayerIdentity> playerIdentitySnapshot = [];
     private IReadOnlyList<ActPlayerIdentity> observedPlayerIdentitySnapshot = [];
     private ActPlayerPose? localPlayerPoseSnapshot;
@@ -266,10 +267,13 @@ public sealed class Plugin : IDalamudPlugin
             condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
             partyList.Count > 1 &&
             partyList.Any(member => member.CurrentHP > 0);
-        var dutyPartyWiped = () => IsDutyPartyWiped(
-            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty],
-            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious],
-            partyList.Any(member => member.CurrentHP > 0));
+        var dutyPartyWiped = () =>
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.BoundByDuty] &&
+            condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious] &&
+            IsDutyPartyWiped(
+                boundByDuty: true,
+                localPlayerUnconscious: true,
+                anyPartyMemberAlive: partyList.Any(static member => member.CurrentHP > 0));
         encounterModeStateProvider = new EncounterModeStateProvider(
             dataManager,
             clientState,
@@ -531,8 +535,6 @@ public sealed class Plugin : IDalamudPlugin
         parserEngine = new ParserEngine(parserAdapter);
         var meterService = new MeterService(stateStore, () => configuration.Meter, () => configuration.ParserScope);
 
-        _ = new OverlayManager(new OverlayEventBus());
-
         text = new UiText(configuration);
         DactTheme.GameAssets = new GameSkinAssets(textureProvider, dataManager);
         DactTheme.UltimateAssets = new UltimateSkinAssets(icon =>
@@ -549,8 +551,6 @@ public sealed class Plugin : IDalamudPlugin
         var administratorIcon = textureProvider.GetFromFile(Path.Combine(assetDirectory, "Icons", "Player26_Icon.png"));
         var sponsorIcon = textureProvider.GetFromFile(Path.Combine(assetDirectory, "Icons", "SponsorCrown.png"));
         keepAliveTextures = [logoTexture, administratorIcon, sponsorIcon];
-        var launcherTexture = textureProvider.GetFromFile(
-            Path.Combine(assetDirectory, "dact-logo.png"));
         var jobIcons = new JobIconTextureSet(
             textureProvider,
             Path.Combine(assetDirectory, "JobIcons"));
@@ -619,15 +619,6 @@ public sealed class Plugin : IDalamudPlugin
             roleSplitHealerWindow,
             text,
             SaveConfiguration);
-        encounterWindow = new EncounterWindow(
-            stateStore,
-            paths,
-            configuration,
-            text,
-            jobIcons,
-            logoTexture,
-            zoneNameLocalizer.Localize,
-            SaveConfiguration);
         factoryResetService = new FactoryResetService(
             parserEngine,
             paths,
@@ -655,33 +646,6 @@ public sealed class Plugin : IDalamudPlugin
         overlayHotkeys = new HtmlOverlayHotkeyService();
         overlayHotkeyEditor = new OverlayHotkeyEditor(overlayHotkeys);
         overlayHotkeys.Configure(configuration.OverlayWindows);
-        advancedSettingsWindow = new SettingsWindow(
-            configuration,
-            parserEngine,
-            paths,
-            logger,
-            SaveConfiguration,
-            ApplyHistoryLimit,
-            () => ApplyActPermissionChanges(),
-            ResolveGameRegionSelection,
-            SetGameRegionMode,
-            StartFactoryReset,
-            () => packageInstaller.Discover(configuration.DisabledActPluginIds),
-            SelectPluginPackage,
-            OpenPluginDirectory,
-            text,
-            () => cactbotInstaller.IsInstalled,
-            GetCactbotOperationStatus,
-            SelectCactbotPackage,
-            OpenCactbotOverlay,
-            OpenCactbotSettings,
-            () => actRuntime.OverlayTemplates,
-            OpenHtmlOverlay,
-            CloseHtmlOverlay,
-            DeleteHtmlOverlay,
-            name => _ = actRuntime.ApplyOverlayWindowSettings(name),
-            OpenActPluginConfiguration,
-            () => StartBundledPluginUpdateCheck(openWindow: true));
         statusWindow = new StatusWindow(
             parserEngine,
             text,
@@ -884,7 +848,7 @@ public sealed class Plugin : IDalamudPlugin
             StartCloudOperation(token => cloudClient.AcknowledgeSponsorAsync(username, grantId, token)), kind: CloudRoleNoticeKind.Sponsor);
         launcherWindow = new LauncherWindow(
             configuration,
-            launcherTexture,
+            logoTexture,
             text,
             settingsWindow.ToggleAnimated,
             ToggleMeter,
@@ -904,12 +868,9 @@ public sealed class Plugin : IDalamudPlugin
         meterWindowSystem.AddWindow(roleSplitHealerWindow);
         windowSystem.AddWindow(meterStyleEditorWindow);
         windowSystem.AddWindow(simplifiedHomeWindow);
-        windowSystem.AddWindow(encounterWindow);
         settingsWindow.HotkeyEditor = overlayHotkeyEditor;
-        advancedSettingsWindow.HotkeyEditor = overlayHotkeyEditor;
         windowSystem.AddWindow(settingsWindow);
         windowSystem.AddWindow(helpWindow);
-        windowSystem.AddWindow(advancedSettingsWindow);
         windowSystem.AddWindow(statusWindow);
         windowSystem.AddWindow(thirdPartyPluginNoticeWindow);
         windowSystem.AddWindow(coreResourceDownloadWindow);
@@ -1024,7 +985,6 @@ public sealed class Plugin : IDalamudPlugin
         settingsWindow.Detach();
         progressionTracker.Dispose();
         services.Framework.Update -= OnFrameworkUpdateForScenes;
-        advancedSettingsWindow.Detach();
         statusWindow.Detach();
         windowSystem.RemoveAllWindows();
         meterWindowSystem.RemoveAllWindows();
@@ -1080,6 +1040,7 @@ public sealed class Plugin : IDalamudPlugin
         // open with every frame, so a window opened later never shows a frame without its logo,
         // badges or skin artwork before they reload (the flash when opening the control center).
         foreach (var texture in keepAliveTextures) texture.GetWrapOrEmpty();
+        if (settingsWindow.NeedsSplashLogoPreload) settingsWindow.LogoLayers?.GetWrapOrEmpty();
         if (DactTheme.Palette.Light) DactTheme.GameAssets?.KeepAlive();
         if (DactTheme.Palette.Ultimate is { } plate) DactTheme.UltimateAssets?.Icon(plate.BackingIcon);
         var noticeAccount = appearanceAccount.CanUseDact ? appearanceAccount : CloudClientSnapshot.SignedOut();
@@ -1110,7 +1071,6 @@ public sealed class Plugin : IDalamudPlugin
         // The full-screen shield prevents clicks leaking into the game while an HTML overlay
         // is being positioned, but it must not sit above the controls used to finish editing.
         var hasVisibleManagementWindow = settingsWindow.IsOpen ||
-                                         advancedSettingsWindow.IsOpen ||
                                          statusWindow.IsOpen ||
                                          helpWindow.IsOpen ||
                                          launcherWindow.IsOpen ||
@@ -1119,7 +1079,6 @@ public sealed class Plugin : IDalamudPlugin
                                          cloudBanNoticeWindow.IsOpen ||
                                          cloudAdministratorNotice.IsOpen ||
                                          cloudSponsorNotice.IsOpen ||
-                                         encounterWindow.IsOpen ||
                                          simplifiedHomeWindow.IsOpen ||
                                          meterStyleEditorWindow.IsOpen || friendsUi.AnyOpen;
         OverlayEditShield.Draw(
@@ -1331,13 +1290,11 @@ public sealed class Plugin : IDalamudPlugin
         horizontalMeterWindow.IsOpen = false;
         roleSplitDamageWindow.IsOpen = false;
         roleSplitHealerWindow.IsOpen = false;
-        advancedSettingsWindow.IsOpen = false;
         statusWindow.IsOpen = false;
         // Help stays open: it is static guidance, and the sign-in page's help button opens it
         // before the account is ready.
         launcherWindow.IsOpen = false;
         thirdPartyPluginNoticeWindow.IsOpen = false;
-        encounterWindow.IsOpen = false;
         meterStyleEditorWindow.IsOpen = false;
         simplifiedHomeWindow.IsOpen = false;
         searchWindow.IsOpen = false;
@@ -1411,12 +1368,10 @@ public sealed class Plugin : IDalamudPlugin
             roleSplitDamageWindow.IsOpen = false;
             roleSplitHealerWindow.IsOpen = false;
             settingsWindow.IsOpen = false;
-            advancedSettingsWindow.IsOpen = false;
             statusWindow.IsOpen = false;
             helpWindow.IsOpen = false;
             launcherWindow.IsOpen = false;
             thirdPartyPluginNoticeWindow.IsOpen = false;
-            encounterWindow.IsOpen = false;
             meterStyleEditorWindow.IsOpen = false;
             simplifiedHomeWindow.IsOpen = false;
             coreResourceDownloadWindow.IsOpen = false;
@@ -1751,20 +1706,16 @@ public sealed class Plugin : IDalamudPlugin
     {
         simplifiedWindowSnapshot ??= new SimplifiedWindowSnapshot(
             settingsWindow.IsOpen,
-            advancedSettingsWindow.IsOpen,
             statusWindow.IsOpen,
             helpWindow.IsOpen,
             launcherWindow.IsOpen,
             thirdPartyPluginNoticeWindow.IsOpen,
-            encounterWindow.IsOpen,
             meterStyleEditorWindow.IsOpen);
         settingsWindow.IsOpen = false;
-        advancedSettingsWindow.IsOpen = false;
         statusWindow.IsOpen = false;
         helpWindow.IsOpen = false;
         launcherWindow.IsOpen = false;
         thirdPartyPluginNoticeWindow.IsOpen = false;
-        encounterWindow.IsOpen = false;
         meterStyleEditorWindow.IsOpen = false;
         // Restoring account access should not open the simplified home either.
         // Explicitly entering simplified mode still opens it via the default above.
@@ -1785,12 +1736,10 @@ public sealed class Plugin : IDalamudPlugin
         }
 
         settingsWindow.IsOpen = snapshot.Settings;
-        advancedSettingsWindow.IsOpen = snapshot.AdvancedSettings;
         statusWindow.IsOpen = snapshot.Status;
         helpWindow.IsOpen = snapshot.Help;
         launcherWindow.IsOpen = snapshot.Launcher;
         thirdPartyPluginNoticeWindow.IsOpen = snapshot.ThirdPartyNotice;
-        encounterWindow.IsOpen = snapshot.EncounterHistory;
         meterStyleEditorWindow.IsOpen = snapshot.MeterStyleEditor;
         simplifiedWindowSnapshot = null;
     }
@@ -2614,8 +2563,10 @@ public sealed class Plugin : IDalamudPlugin
                 return null;
             }
 
-            // Retain every task until unload. Removing completed tasks via a continuation
-            // would itself create unowned plugin code that could race the ALC teardown.
+            // Prune completed tasks synchronously under the lock so long sessions do not retain
+            // finished state machines/closures, without creating detached continuations that could
+            // race ALC teardown.
+            backgroundOperations.RemoveAll(static existing => existing.IsCompleted);
             var task = Task.Run(async () =>
             {
                 try
@@ -5449,16 +5400,30 @@ public sealed class Plugin : IDalamudPlugin
         try
         {
             var localPlayer = objectTable.LocalPlayer;
-            Volatile.Write(
-                ref localPlayerPoseSnapshot,
-                localPlayer is null || localPlayer.EntityId == 0
-                    ? null
-                    : ActPlayerPose.FromDalamud(
-                        localPlayer.EntityId,
-                        localPlayer.Position.X,
-                        localPlayer.Position.Y,
-                        localPlayer.Position.Z,
-                        localPlayer.Rotation));
+            if (localPlayer is null || localPlayer.EntityId == 0)
+            {
+                if (Volatile.Read(ref localPlayerPoseSnapshot) is not null)
+                {
+                    Volatile.Write(ref localPlayerPoseSnapshot, null);
+                }
+            }
+            else
+            {
+                var pos = localPlayer.Position;
+                var rot = localPlayer.Rotation;
+                var prev = Volatile.Read(ref localPlayerPoseSnapshot);
+                if (prev is null ||
+                    prev.EntityId != localPlayer.EntityId ||
+                    prev.PositionX != pos.X ||
+                    prev.PositionY != pos.Z ||
+                    prev.PositionZ != pos.Y ||
+                    prev.Rotation != rot)
+                {
+                    Volatile.Write(
+                        ref localPlayerPoseSnapshot,
+                        ActPlayerPose.FromDalamud(localPlayer.EntityId, pos.X, pos.Y, pos.Z, rot));
+                }
+            }
         }
         catch (Exception ex)
         {
@@ -5496,69 +5461,81 @@ public sealed class Plugin : IDalamudPlugin
         {
             // Reserved before the object table is read; see HostEntityEpochClock.
             var epoch = hostEntityEpochClock.BeginCapture();
+            var baseline = hostEntitySnapshotBaseline;
+            var baselineById = hostEntityBaselineById;
+            if (!fullSnapshotDue && baseline is not null && baselineById is not null)
+            {
+                var directDelta = FfxivEntitySnapshotBuilder.TryBuildDeltaDirect(
+                    objectTable,
+                    partyList,
+                    services.ClientState,
+                    playerState,
+                    now,
+                    baseline,
+                    baselineById,
+                    epoch,
+                    hostEntityPartyTypesBuffer,
+                    hostEntitySeenIdsBuffer);
+                if (directDelta is not null)
+                {
+                    // An unchanged table is normally not worth a message, but a forwarded log line may
+                    // be waiting in the Host for exactly this capture.
+                    if (directDelta.Upserts.Count == 0 && directDelta.RemovedIds.Count == 0 &&
+                        !hostEntityEpochClock.IsCaptureAwaited)
+                    {
+                        return;
+                    }
+
+                    hostEntityEpochClock.MarkPublished(epoch);
+                    System.Text.Json.JsonElement? serializedDelta = null;
+                    System.Text.Json.JsonElement SerializedDelta()
+                        => serializedDelta ??= System.Text.Json.JsonSerializer.SerializeToElement(directDelta);
+                    hostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
+                    genericHostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
+                    if (Volatile.Read(ref matchaEventsEnabled) == 1)
+                    {
+                        matchaHostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
+                    }
+                    return;
+                }
+
+                // Territory or local player changed; promote to a full snapshot immediately.
+                fullSnapshotDue = true;
+                nextHostEntitySnapshotAt = now.AddMilliseconds(500);
+            }
+
             var snapshot = FfxivEntitySnapshotBuilder.Build(
                 objectTable,
                 partyList,
                 services.ClientState,
                 playerState,
-                now) with { Epoch = epoch };
+                now,
+                out var nextBaselineById) with { Epoch = epoch };
 
-            var baseline = hostEntitySnapshotBaseline;
-            if (baseline is null ||
-                baseline.TerritoryId != snapshot.TerritoryId ||
-                baseline.CurrentPlayerId != snapshot.CurrentPlayerId)
+            // Parser/overlay startup can run on a worker thread, while Dalamud's object table
+            // is framework-thread-only. The full fallback also refreshes identity consumers.
+            var identities = BuildPlayerIdentities(
+                playerState,
+                partyList,
+                objectTable,
+                services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]);
+            Volatile.Write(ref playerIdentitySnapshot, identities);
+            Volatile.Write(ref observedPlayerIdentitySnapshot, BuildObservedPlayerIdentities(objectTable));
+            hostEntitySnapshotBaseline = snapshot;
+            hostEntityBaselineById = nextBaselineById;
+            // Serialized on first use and shared: this is the frame thread, and three
+            // Hosts used to cost three serializations of every actor in the zone.
+            System.Text.Json.JsonElement? serializedSnapshot = null;
+            System.Text.Json.JsonElement SerializedSnapshot()
+                => serializedSnapshot ??= System.Text.Json.JsonSerializer.SerializeToElement(snapshot);
+            hostSupervisor.PublishFfxivEntities(SerializedSnapshot);
+            genericHostSupervisor.PublishFfxivEntities(SerializedSnapshot);
+            if (Volatile.Read(ref matchaEventsEnabled) == 1)
             {
-                fullSnapshotDue = true;
-                nextHostEntitySnapshotAt = now.AddMilliseconds(500);
-            }
-
-            if (fullSnapshotDue)
-            {
-                // Parser/overlay startup can run on a worker thread, while Dalamud's object table
-                // is framework-thread-only. The full fallback also refreshes identity consumers.
-                var identities = BuildPlayerIdentities(
-                    playerState,
-                    partyList,
-                    objectTable,
-                    services.Condition[Dalamud.Game.ClientState.Conditions.ConditionFlag.Unconscious]);
-                Volatile.Write(ref playerIdentitySnapshot, identities);
-                Volatile.Write(ref observedPlayerIdentitySnapshot, BuildObservedPlayerIdentities(objectTable));
-                hostEntitySnapshotBaseline = snapshot;
-                // Serialized on first use and shared: this is the frame thread, and three
-                // Hosts used to cost three serializations of every actor in the zone.
-                System.Text.Json.JsonElement? serializedSnapshot = null;
-                System.Text.Json.JsonElement SerializedSnapshot()
-                    => serializedSnapshot ??= System.Text.Json.JsonSerializer.SerializeToElement(snapshot);
-                hostSupervisor.PublishFfxivEntities(SerializedSnapshot);
-                genericHostSupervisor.PublishFfxivEntities(SerializedSnapshot);
-                if (Volatile.Read(ref matchaEventsEnabled) == 1)
-                {
-                    matchaHostSupervisor.PublishFfxivEntities(SerializedSnapshot);
-                }
-
-                hostEntityEpochClock.MarkPublished(epoch);
-                return;
-            }
-
-            var delta = FfxivEntitySnapshotBuilder.BuildDelta(baseline!, snapshot) with { Epoch = epoch };
-            // An unchanged table is normally not worth a message, but a forwarded log line may
-            // be waiting in the Host for exactly this capture.
-            if (delta.Upserts.Count == 0 && delta.RemovedIds.Count == 0 &&
-                !hostEntityEpochClock.IsCaptureAwaited)
-            {
-                return;
+                matchaHostSupervisor.PublishFfxivEntities(SerializedSnapshot);
             }
 
             hostEntityEpochClock.MarkPublished(epoch);
-            System.Text.Json.JsonElement? serializedDelta = null;
-            System.Text.Json.JsonElement SerializedDelta()
-                => serializedDelta ??= System.Text.Json.JsonSerializer.SerializeToElement(delta);
-            hostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
-            genericHostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
-            if (Volatile.Read(ref matchaEventsEnabled) == 1)
-            {
-                matchaHostSupervisor.PublishFfxivEntityDelta(SerializedDelta);
-            }
         }
         catch (Exception ex)
         {
@@ -6269,11 +6246,9 @@ public sealed class Plugin : IDalamudPlugin
 
     private sealed record SimplifiedWindowSnapshot(
         bool Settings,
-        bool AdvancedSettings,
         bool Status,
         bool Help,
         bool Launcher,
         bool ThirdPartyNotice,
-        bool EncounterHistory,
         bool MeterStyleEditor);
 }

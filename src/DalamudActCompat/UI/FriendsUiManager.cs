@@ -114,25 +114,78 @@ internal sealed partial class FriendsUiManager : IDisposable
         if (arrived && configuration.FriendNotificationSoundEnabled && (lastSoundAt == long.MinValue || now - lastSoundAt >= 1200))
         { playNotificationSound?.Invoke(); lastSoundAt = now; }
         if (!state.Session.IsSignedIn) return;
-        if (state.Friends is { } friends)
+        if (windows.Count > 0 && state.Friends is { } friends)
         {
-            var active = friends.Friends.Select(f => f.ConversationId).Concat(state.Conversations.Keys).ToHashSet();
-            foreach (var id in windows.Keys.Where(id => !active.Contains(id)).ToArray()) windows.Remove(id);
+            List<string>? staleWindows = null;
+            foreach (var id in windows.Keys)
+            {
+                if (state.Conversations.ContainsKey(id)) continue;
+                var found = false;
+                foreach (var friend in friends.Friends)
+                {
+                    if (string.Equals(friend.ConversationId, id, StringComparison.Ordinal))
+                    {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                {
+                    staleWindows ??= [];
+                    staleWindows.Add(id);
+                }
+            }
+            if (staleWindows is not null)
+            {
+                foreach (var id in staleWindows) windows.Remove(id);
+            }
         }
-        var requests = state.Friends?.Requests.Count(r => r.Direction == "incoming") ?? 0;
+        var requests = CountIncomingRequests(state.Friends);
         if (requests > notifiedRequests) toastUntil = now + (inCombat ? 4500 : 6500);
         notifiedRequests = requests;
+        if (drawerOpen || drawerProgress > 0)
+            drawerProgress = Math.Clamp(drawerProgress + (drawerOpen ? 1 : -1) * ImGui.GetIO().DeltaTime / .16f, 0, 1);
+        var showDrawer = drawerProgress > 0 && mainVisible;
+        var showToast = requests > 0 && now < toastUntil;
+        var hasOpenWindow = false;
+        if (windows.Count > 0)
+        {
+            foreach (var window in windows.Values)
+            {
+                if (window.Open) { hasOpenWindow = true; break; }
+            }
+        }
+        var hasNotifications = incoming.Visible.Count > 0;
+        if (!showDrawer && !hasOpenWindow && !showToast && !hasNotifications)
+        {
+            TrackNonNotificationFocus();
+            return;
+        }
         PushTheme();
         try
         {
-            drawerProgress = Math.Clamp(drawerProgress + (drawerOpen ? 1 : -1) * ImGui.GetIO().DeltaTime / .16f, 0, 1);
-            if (drawerProgress > 0 && mainVisible) DrawDrawer(state);
-            foreach (var pair in windows.ToArray())
-                if (pair.Value.Open) DrawChat(pair.Key, pair.Value, state);
-            if (requests > 0 && now < toastUntil) DrawToast(state, inCombat);
+            if (showDrawer) DrawDrawer(state);
+            if (hasOpenWindow)
+            {
+                foreach (var pair in windows.ToArray())
+                    if (pair.Value.Open) DrawChat(pair.Key, pair.Value, state);
+            }
+            if (showToast) DrawToast(state, inCombat);
             DrawIncomingNotifications(state, now);
         }
         finally { PopTheme(); }
+    }
+
+    private static int CountIncomingRequests(CloudFriendList? friends)
+    {
+        var requests = friends?.Requests;
+        if (requests is null || requests.Count == 0) return 0;
+        var count = 0;
+        for (var i = 0; i < requests.Count; i++)
+        {
+            if (requests[i].Direction == "incoming") count++;
+        }
+        return count;
     }
     // Rows of the legacy drawer show a conversation on the 好友 page.
     private void OpenChat(string id) => ShowConversation(id);

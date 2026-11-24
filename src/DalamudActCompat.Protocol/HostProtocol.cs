@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace DalamudActCompat.Protocol;
 
@@ -336,24 +338,91 @@ public sealed record HostDiagnostic(
     bool IsWindowsFormsThread,
     long RepeatCount);
 
+[JsonSerializable(typeof(HostEnvelope))]
+internal sealed partial class HostProtocolJsonContext : JsonSerializerContext;
+
 public static class HostFrameCodec
 {
+    private sealed class PooledFrameBufferWriter : IBufferWriter<byte>, IDisposable
+    {
+        private byte[] buffer;
+        private int written;
+
+        public PooledFrameBufferWriter(int initialCapacity = 4096)
+        {
+            buffer = ArrayPool<byte>.Shared.Rent(initialCapacity);
+            written = sizeof(int);
+        }
+
+        public int PayloadLength => written - sizeof(int);
+
+        public ReadOnlyMemory<byte> FinalizeFrame()
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(0, sizeof(int)), PayloadLength);
+            return new ReadOnlyMemory<byte>(buffer, 0, written);
+        }
+
+        public void Advance(int count)
+        {
+            written += count;
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            EnsureCapacity(sizeHint);
+            return buffer.AsMemory(written);
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            EnsureCapacity(sizeHint);
+            return buffer.AsSpan(written);
+        }
+
+        private void EnsureCapacity(int sizeHint)
+        {
+            var required = Math.Max(sizeHint, 256);
+            if (buffer.Length - written >= required)
+            {
+                return;
+            }
+
+            var newSize = Math.Max(buffer.Length * 2, written + required);
+            var next = ArrayPool<byte>.Shared.Rent(newSize);
+            Buffer.BlockCopy(buffer, 0, next, 0, written);
+            ArrayPool<byte>.Shared.Return(buffer);
+            buffer = next;
+        }
+
+        public void Dispose()
+        {
+            var rented = buffer;
+            buffer = Array.Empty<byte>();
+            if (rented.Length > 0)
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+    }
+
     public static async ValueTask WriteAsync(
         Stream stream,
         HostEnvelope envelope,
         CancellationToken cancellationToken)
     {
-        var payload = JsonSerializer.SerializeToUtf8Bytes(envelope);
-        if (payload.Length > HostProtocol.MaximumFrameBytes)
+        using var frameWriter = new PooledFrameBufferWriter();
+        using (var jsonWriter = new Utf8JsonWriter(frameWriter))
         {
-            throw new InvalidDataException(
-                $"IPC frame is {payload.Length} bytes; maximum is {HostProtocol.MaximumFrameBytes}.");
+            JsonSerializer.Serialize(jsonWriter, envelope, HostProtocolJsonContext.Default.HostEnvelope);
         }
 
-        var header = new byte[sizeof(int)];
-        BinaryPrimitives.WriteInt32LittleEndian(header, payload.Length);
-        await stream.WriteAsync(header, cancellationToken).ConfigureAwait(false);
-        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+        if (frameWriter.PayloadLength > HostProtocol.MaximumFrameBytes)
+        {
+            throw new InvalidDataException(
+                $"IPC frame is {frameWriter.PayloadLength} bytes; maximum is {HostProtocol.MaximumFrameBytes}.");
+        }
+
+        await stream.WriteAsync(frameWriter.FinalizeFrame(), cancellationToken).ConfigureAwait(false);
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -361,40 +430,60 @@ public static class HostFrameCodec
         Stream stream,
         CancellationToken cancellationToken)
     {
-        var header = new byte[sizeof(int)];
-        if (!await ReadExactlyOrEofAsync(stream, header, cancellationToken).ConfigureAwait(false))
+        var header = ArrayPool<byte>.Shared.Rent(sizeof(int));
+        int length;
+        try
         {
-            return null;
+            if (!await ReadExactlyOrEofAsync(stream, header.AsMemory(0, sizeof(int)), cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            length = BinaryPrimitives.ReadInt32LittleEndian(header.AsSpan(0, sizeof(int)));
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(header);
         }
 
-        var length = BinaryPrimitives.ReadInt32LittleEndian(header);
         if (length is <= 0 or > HostProtocol.MaximumFrameBytes)
         {
             throw new InvalidDataException(
                 $"IPC frame length {length} is outside the allowed range.");
         }
 
-        var payload = new byte[length];
-        if (!await ReadExactlyOrEofAsync(stream, payload, cancellationToken).ConfigureAwait(false))
+        var payload = ArrayPool<byte>.Shared.Rent(length);
+        try
         {
-            throw new EndOfStreamException("IPC stream ended in the middle of a frame.");
-        }
+            if (!await ReadExactlyOrEofAsync(stream, payload.AsMemory(0, length), cancellationToken)
+                    .ConfigureAwait(false))
+            {
+                throw new EndOfStreamException("IPC stream ended in the middle of a frame.");
+            }
 
-        var envelope = JsonSerializer.Deserialize<HostEnvelope>(payload)
-                       ?? throw new InvalidDataException("IPC frame contains no envelope.");
-        if (envelope.ProtocolVersion != HostProtocol.CurrentVersion)
+            var envelope = JsonSerializer.Deserialize(
+                               payload.AsSpan(0, length),
+                               HostProtocolJsonContext.Default.HostEnvelope)
+                           ?? throw new InvalidDataException("IPC frame contains no envelope.");
+            if (envelope.ProtocolVersion != HostProtocol.CurrentVersion)
+            {
+                throw new InvalidDataException(
+                    $"Unsupported IPC protocol {envelope.ProtocolVersion}; expected {HostProtocol.CurrentVersion}.");
+            }
+
+            if (string.IsNullOrWhiteSpace(envelope.SessionId) ||
+                string.IsNullOrWhiteSpace(envelope.Type))
+            {
+                throw new InvalidDataException("IPC envelope is missing session or message type.");
+            }
+
+            return envelope;
+        }
+        finally
         {
-            throw new InvalidDataException(
-                $"Unsupported IPC protocol {envelope.ProtocolVersion}; expected {HostProtocol.CurrentVersion}.");
+            ArrayPool<byte>.Shared.Return(payload);
         }
-
-        if (string.IsNullOrWhiteSpace(envelope.SessionId) ||
-            string.IsNullOrWhiteSpace(envelope.Type))
-        {
-            throw new InvalidDataException("IPC envelope is missing session or message type.");
-        }
-
-        return envelope;
     }
 
     private static async ValueTask<bool> ReadExactlyOrEofAsync(
