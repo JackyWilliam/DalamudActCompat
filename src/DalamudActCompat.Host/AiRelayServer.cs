@@ -62,7 +62,8 @@ internal static class AiRelayServer
         return 0;
     }
 
-    private static async Task WatchParentAsync(int parentProcessId, CancellationTokenSource stop)
+    // Shared with the other helper modes of this executable.
+    internal static async Task WatchParentAsync(int parentProcessId, CancellationTokenSource stop)
     {
         try
         {

@@ -95,6 +95,8 @@ public sealed partial class ControlCenterWindow
         AddPage("history", "战斗记录", "Encounter history", Page.History, () => historyTab = 0);
         AddPage("target", "开荒进度", "Progression", Page.History, () => historyTab = 1);
         AddPage("folder", "日志文件", "Log files", Page.History, () => historyTab = 2);
+        AddPage("fflogs", "FFLogs", "FFLogs", Page.Fflogs, () => fflogsUploadSettingsPage = false);
+        AddPage("gear", "FFLogs 上传设置", "FFLogs upload settings", Page.Fflogs, () => fflogsUploadSettingsPage = true);
         AddPage("layers", "悬浮窗", "Overlays", Page.Overlays);
         AddPage("plug", "扩展", "Extensions", Page.Extensions);
         if (snapshot.CanUseDact && Friends is not null)
@@ -119,14 +121,25 @@ public sealed partial class ControlCenterWindow
         Setting("users", "游戏解析范围", "Parse scope", "主页 · 基础设置", "Home · Basics", home, "home-general");
 
         var meter = Page.Meter;
-        Setting("meter", "榜单模板（经典榜 / 横版 / 职能分栏）", "Meter template", "战斗统计 · 榜单", "Combat Meter · Ranking", meter, "meter-ranking");
-        Setting("meter", "统计重置", "Encounter reset", "战斗统计 · 榜单", "Combat Meter · Ranking", meter, "meter-ranking");
-        Setting("meter", "刷新间隔", "Refresh interval", "战斗统计 · 榜单", "Combat Meter · Ranking", meter, "meter-ranking");
-        Setting("users", "玩家 ID 与代称", "Player names and aliases", "战斗统计 · 榜单", "Combat Meter · Ranking", meter, "meter-ranking");
-        Setting("meter", "启用 FFLogs 在线估算", "Enable FFLogs online estimate", "战斗统计 · FFLogs", "Combat Meter · FFLogs", meter, "meter-fflogs",
-            get: () => configuration.Fflogs.Enabled, set: value => { configuration.Fflogs.Enabled = value; saveConfiguration(); });
-        Setting("meter", "FFLogs Client ID / Client Secret", "FFLogs client ID / secret", "战斗统计 · FFLogs", "Combat Meter · FFLogs", meter, "meter-fflogs");
-        Setting("edit", "自定义榜单样式", "Customize meter style", "战斗统计 · 榜单模板", "Combat Meter · Template", meter, "meter-ranking", openMeterStyleEditor);
+        Setting("meter", "榜单模板（经典榜 / 横版 / 职能分栏）", "Meter template", "战斗统计 · 榜单模板", "Combat Meter · Template", meter, "meter-template");
+        Setting("meter", "统计重置", "Encounter reset", "战斗统计 · 统计", "Combat Meter · Statistics", meter, "meter-stats");
+        Setting("meter", "刷新间隔", "Refresh interval", "战斗统计 · 统计", "Combat Meter · Statistics", meter, "meter-stats");
+        Setting("users", "玩家 ID 与代称", "Player names and aliases", "战斗统计 · 显示", "Combat Meter · Display", meter, "meter-display");
+        Setting("edit", "自定义榜单样式", "Customize meter style", "战斗统计 · 榜单模板", "Combat Meter · Template", meter, "meter-template", openMeterStyleEditor);
+
+        var fflogsPage = Page.Fflogs;
+        Setting("fflogs", "启用 FFLogs 在线估算", "Enable FFLogs online estimate", "FFLogs · Parse 预估", "FFLogs · Parse estimate", fflogsPage, "meter-fflogs",
+            () => fflogsUploadSettingsPage = false,
+            () => configuration.Fflogs.Enabled, value => { configuration.Fflogs.Enabled = value; saveConfiguration(); });
+        Setting("fflogs", "FFLogs Client ID / Client Secret", "FFLogs client ID / secret", "FFLogs · Parse 预估", "FFLogs · Parse estimate", fflogsPage, "meter-fflogs",
+            () => fflogsUploadSettingsPage = false);
+        Setting("upload", "FFLogs 日志上传（登录、上传最新日志、实时上传）", "FFLogs log upload (sign in, upload, live upload)", "FFLogs · 日志上传", "FFLogs · Log upload", fflogsPage, "fflogs-upload",
+            () => fflogsUploadSettingsPage = false);
+        Setting("upload", "报告可见性 / 区域 / 公会", "Report visibility / region / guild", "FFLogs · 上传设置", "FFLogs · Upload settings", fflogsPage, "fflogs-upload-report",
+            () => fflogsUploadSettingsPage = true);
+        Setting("upload", "启动时自动登录 FFLogs", "Sign in to FFLogs automatically on startup", "FFLogs · 上传设置", "FFLogs · Upload settings", fflogsPage, "fflogs-upload-auto",
+            () => fflogsUploadSettingsPage = true,
+            () => configuration.Fflogs.UploadAutoLogin, value => { configuration.Fflogs.UploadAutoLogin = value; saveConfiguration(); });
 
         var overlays = Page.Overlays;
         Setting("layers", "Cactbot 设置 / 安装与更新", "Cactbot settings / install", "悬浮窗 · Cactbot", "Overlays · Cactbot", overlays, "cactbot-management");

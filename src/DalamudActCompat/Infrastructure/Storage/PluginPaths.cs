@@ -33,6 +33,7 @@ public sealed class PluginPaths
         AiKeyFile = Path.Combine(ConfigDirectory, "ai-key.dat");
         AiKeyDirectory = Path.Combine(ConfigDirectory, "ai-keys");
         FflogsUploadCredentialFile = Path.Combine(ConfigDirectory, "fflogs-upload.dat");
+        FflogsParserCacheDirectory = Path.Combine(ConfigDirectory, "fflogs-parser");
         CloudDeviceFile = Path.Combine(ConfigDirectory, "cloud-device.dat");
         CloudBanFile = Path.Combine(ConfigDirectory, "cloud-ban.dat");
         CloudRollbackDirectory = Path.Combine(
@@ -80,6 +81,9 @@ public sealed class PluginPaths
     public string AiKeyDirectory { get; }
 
     public string FflogsUploadCredentialFile { get; }
+
+    // The FF Logs parser script the upload helper downloads; refreshed daily by the helper.
+    public string FflogsParserCacheDirectory { get; }
 
     public string CloudDeviceFile { get; }
 

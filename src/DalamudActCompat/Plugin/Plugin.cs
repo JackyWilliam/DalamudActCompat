@@ -15,7 +15,7 @@ using DalamudActCompat.Core.Models;
 using DalamudActCompat.Core.State;
 using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
-using FflogsUploadService = DalamudActCompat.Fflogs.Upload.FflogsUploadService;
+using DalamudActCompat.Fflogs.Upload;
 using DalamudActCompat.Infrastructure.Diagnostics;
 using DalamudActCompat.Infrastructure.Cloud;
 using DalamudActCompat.Infrastructure.Ipc;
@@ -116,6 +116,8 @@ public sealed class Plugin : IDalamudPlugin
     private readonly SemaphoreSlim bundledUpdateCheckLock = new(1, 1);
     private readonly CancellationTokenSource cactbotOperationCancellation = new();
     private readonly CancellationTokenSource cloudOperationCancellation = new();
+    private const long FflogsUploadStartupWaitMs = 5 * 60_000;
+    private readonly CancellationTokenSource fflogsUploadStartupCancellation = new();
     private readonly object cactbotTaskLock = new();
     private readonly object cactbotStatusLock = new();
     private readonly SemaphoreSlim cactbotFileOperationGate = new(1, 1);
@@ -455,7 +457,13 @@ public sealed class Plugin : IDalamudPlugin
             paths.FflogsCacheFile,
             logger,
             () => ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese);
-        fflogsUploadService = new FflogsUploadService(logger, () => paths.CombatLogDirectory, paths.FflogsUploadCredentialFile);
+        fflogsUploadService = new FflogsUploadService(
+            logger,
+            hostSupervisor.PrepareExecutable,
+            paths.FflogsUploadCredentialFile,
+            paths.FflogsParserCacheDirectory,
+            (cancellationToken, reportPercent) =>
+                FflogsUploadEngineFiles.ResolveAsync(resourcePackManager, cancellationToken, reportPercent));
         actRuntime = new SelfHostedActRuntime(
             pluginInterface,
             log,
@@ -827,7 +835,7 @@ public sealed class Plugin : IDalamudPlugin
         // The form has its own window now, so the layout editor no longer opens the control center for it.
         meterStyleEditorWindow.OpenFeedback = () => settingsWindow.OpenFeedback();
         meterStyleEditorWindow.OpenHelp = () => helpWindow.OpenTopic("CombatMeter");
-        meterStyleEditorWindow.OpenMeterSettings = settingsWindow.ShowMeterPage;
+        meterStyleEditorWindow.OpenFflogsSettings = settingsWindow.ShowFflogsPage;
         var aiKeys = new DalamudActCompat.Ai.AiKeyStore(paths.AiKeyDirectory, paths.AiKeyFile);
         try
         {
@@ -917,7 +925,8 @@ public sealed class Plugin : IDalamudPlugin
 
         DalamudActCompat.UI.Kit.DactFonts.Initialize(pluginInterface.UiBuilder);
         pluginInterface.UiBuilder.Draw += Draw;
-        _ = StartFflogsUploadStartupAsync();
+        // Tracked like every other background task, so unload joins it instead of racing it.
+        StartBackgroundOperation(StartFflogsUploadStartupAsync);
         pluginInterface.UiBuilder.OpenConfigUi += OpenConfigUi;
         pluginInterface.UiBuilder.OpenMainUi += OpenMainUi;
         commandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
@@ -2637,6 +2646,10 @@ public sealed class Plugin : IDalamudPlugin
         {
             backgroundOperationShutdownStarted = true;
         }
+
+        // The automatic FFLogs sign-in may be waiting for the Host package; unload joins every
+        // background task and must not wait with it.
+        fflogsUploadStartupCancellation.Cancel();
     }
 
     private async Task ShutdownBackgroundOperationsAsync()
@@ -5124,26 +5137,64 @@ public sealed class Plugin : IDalamudPlugin
         await DisposeRemainingComponentsAsync().ConfigureAwait(false);
     }
 
+    // The one automatic FFLogs sign-in after load, for players who turned it on.
     private async Task StartFflogsUploadStartupAsync()
     {
+        var cancellationToken = fflogsUploadStartupCancellation.Token;
         try
         {
             var settings = configuration.Fflogs;
-            if (!settings.UploadAutoLogin || string.IsNullOrWhiteSpace(settings.UploadEmail) ||
-                !fflogsUploadService.HasSavedPassword)
+            if (!settings.UploadAutoLogin || string.IsNullOrWhiteSpace(settings.UploadEmail))
+            {
                 return;
+            }
+
+            var password = fflogsUploadService.LoadSavedPassword();
+            if (string.IsNullOrEmpty(password))
+            {
+                return;
+            }
+
+            // Right after an update the Host package can still be downloading, and the account
+            // check settles a moment after load. Wait for both instead of failing the only
+            // attempt; a password never leaves the PC for an account that may not use DACT.
+            var deadline = Environment.TickCount64 + FflogsUploadStartupWaitMs;
+            while (!IsDactAccessAllowed() || !IsHostResourceReady())
+            {
+                if (Environment.TickCount64 > deadline)
+                {
+                    return;
+                }
+
+                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
+            }
+
             var chinese = ResolveGameRegionSelection().EffectiveRegion == HostGameRegion.Chinese;
-            if (!await fflogsUploadService.LoginAsync(settings.UploadEmail,
-                    fflogsUploadService.LoadSavedPassword()!, chinese).ConfigureAwait(false))
-                return;
+            await fflogsUploadService.LoginAsync(settings.UploadEmail, password, chinese, cancellationToken)
+                .ConfigureAwait(false);
             if (settings.UploadAutoStartLive)
-                fflogsUploadService.StartLive(ResolveCombatLogDirectory(), chinese, settings.UploadVisibility,
-                    settings.UploadRegion, settings.UploadGuildId, settings.UploadDescription,
-                    settings.UploadPreviousFights);
+            {
+                await fflogsUploadService.StartLiveAsync(
+                        ResolveActiveCombatLogDirectory(),
+                        settings.CreateUploadOptions(chinese),
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
             logger.Warning($"FFLogs upload auto-start failed: {ex.Message}");
+        }
+    }
+
+    private bool IsHostResourceReady()
+    {
+        lock (resourcePackOperationLock)
+        {
+            return hostResourceStatus.State == ResourcePackOperationState.Ready;
         }
     }
 

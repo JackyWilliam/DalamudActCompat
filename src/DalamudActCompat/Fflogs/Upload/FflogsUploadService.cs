@@ -1,129 +1,340 @@
 using DalamudActCompat.Infrastructure.Logging;
+using DalamudActCompat.Protocol;
 
 namespace DalamudActCompat.Fflogs.Upload;
 
+// The game-side face of FFLogs log upload. Parsing and uploading happen in the helper process
+// (FflogsUploadProtocol); this class only sends requests, keeps the last status the helper
+// reported, and stores the remembered password. Every operation returns immediately with a task,
+// because the callers are draw-loop code.
 public sealed class FflogsUploadService : IDisposable
 {
-    private readonly Func<string> defaultDirectory;
-    private readonly FflogsUploadCredentialStore credentialStore;
-    private FflogsUploadClient? client;
+    private const long StatusIntervalMs = 2000;
+    private static readonly FflogsUploadStatus SignedOut = new(false, false, string.Empty, [], false, 0, null, null);
 
-    public FflogsUploadService(PluginLogger logger, Func<string> defaultDirectory, string credentialPath)
+    private readonly FflogsUploadCredentialStore credentialStore;
+    private readonly FflogsUploadHelper helper;
+    private readonly Func<CancellationToken, Action<int>, Task<FflogsUploadEngine>> resolveEngine;
+
+    // Cancelled on unload and deliberately never disposed: an operation that is just starting
+    // may still link to its token.
+    private readonly CancellationTokenSource lifetime = new();
+    private readonly object sync = new();
+    private FflogsUploadStatus status = SignedOut;
+    private FflogsUploadEngine? engine;
+    private Task? statusPoll;
+    private long lastStatusPoll;
+    private int engineDownloadPercent = -1;
+    private const long LatestLogIntervalMs = 3000;
+    private string? latestLogDirectory;
+    private FflogsLatestLog? latestLog;
+    private Task? latestLogScan;
+    private long latestLogScannedAt;
+
+    // resolveEngine fetches the verified V8 runtime and reports download progress in percent.
+    public FflogsUploadService(
+        PluginLogger? logger,
+        Func<string?> hostExecutable,
+        string credentialPath,
+        string parserCacheDirectory,
+        Func<CancellationToken, Action<int>, Task<FflogsUploadEngine>> resolveEngine,
+        string? loopbackSite = null)
     {
-        this.defaultDirectory = defaultDirectory;
         credentialStore = new FflogsUploadCredentialStore(credentialPath);
-        UploadLog.Logger = logger;
+        helper = new FflogsUploadHelper(hostExecutable, parserCacheDirectory, logger, loopbackSite);
+        this.resolveEngine = resolveEngine;
     }
 
-    public bool IsLoggedIn => client?.IsLoggedIn == true;
+    public FflogsUploadStatus Status
+    {
+        get
+        {
+            lock (sync) return PinnedStatus ?? status;
+        }
+    }
 
-    public string Username => client?.Username ?? string.Empty;
-    public IReadOnlyList<GuildInfo> Guilds => client?.Guilds ?? [];
+    // For the UI baseline and help screenshots: they draw the signed-in states without a helper
+    // process, which the status would otherwise fall back from on every Tick.
+    internal FflogsUploadStatus? PinnedStatus { get; set; }
+
+    public bool IsLoggedIn => Status.LoggedIn;
+
+    public bool IsLiveLogging => Status.LiveActive;
+
+    // True once this session has verified the parser engine on disk. Before the first parse it is
+    // unknown rather than missing: checking would mean hashing the files on every look.
+    public bool EngineVerified
+    {
+        get
+        {
+            lock (sync) return engine is not null;
+        }
+    }
+
+    // Null unless the parser engine is being downloaded right now.
+    public int? EngineDownloadPercent
+        => Volatile.Read(ref engineDownloadPercent) is >= 0 and var percent ? percent : null;
+
+    internal int HelperProcessId => helper.ProcessId;
 
     public bool HasSavedPassword => credentialStore.HasSavedPassword;
+
     public string? LoadSavedPassword() => credentialStore.Load();
+
     public void SavePassword(string password) => credentialStore.Save(password);
+
     public void ClearSavedPassword() => credentialStore.Clear();
 
-    public async Task<bool> LoginAsync(string email, string password, bool chineseRegion)
+    // Keeps the status current while an upload control is on screen: a live upload counts
+    // fights on its own, and a helper that exited took the FFLogs session with it.
+    public void Tick()
     {
-        if (string.IsNullOrWhiteSpace(email) || string.IsNullOrEmpty(password))
-            return false;
-        client?.Dispose();
-        client = new FflogsUploadClient(chineseRegion ? "https://cn.fflogs.com" : "https://www.fflogs.com");
-        var success = await client.LoginAsync(email.Trim(), password).ConfigureAwait(false);
-        return success;
-    }
-
-    public async Task<string> UploadLatestAsync(string? directory, bool chineseRegion, string description = "")
-    {
-        directory = string.IsNullOrWhiteSpace(directory) ? defaultDirectory() : directory;
-        var path = LogFileHelper.GetLatestLogFileFromPath(directory);
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            throw new FileNotFoundException("No Network log file was found.", path);
-        if (!IsLoggedIn)
-            throw new InvalidOperationException("Sign in to FFLogs before uploading.");
-        var code = chineseRegion ? "CN" : "NA";
-        return await client!.UploadLogAsync(path, 1, code, 1, string.Empty, description).ConfigureAwait(false);
-    }
-
-    public async Task<IReadOnlyList<ParserEngine.FightUpload>> PrepareAsync(string? directory, bool chineseRegion)
-    {
-        directory = string.IsNullOrWhiteSpace(directory) ? defaultDirectory() : directory;
-        var path = LogFileHelper.GetLatestLogFileFromPath(directory);
-        if (!File.Exists(path)) throw new FileNotFoundException("No Network log file was found.", path);
-        if (!IsLoggedIn) throw new InvalidOperationException("Sign in to FFLogs before parsing.");
-        return await client!.PrepareUploadsAsync(path, chineseRegion ? "CN" : "NA").ConfigureAwait(false);
-    }
-
-    public async Task<string> UploadPreparedAsync(
-        string? directory,
-        bool chineseRegion,
-        IList<ParserEngine.FightUpload> fights,
-        int visibility,
-        int region,
-        string guildId,
-        string description)
-    {
-        directory = string.IsNullOrWhiteSpace(directory) ? defaultDirectory() : directory;
-        var path = LogFileHelper.GetLatestLogFileFromPath(directory);
-        if (!File.Exists(path)) throw new FileNotFoundException("No Network log file was found.", path);
-        if (!IsLoggedIn) throw new InvalidOperationException("Sign in to FFLogs before uploading.");
-        return await client!.UploadPreparedAsync(Path.GetFileName(path), fights, region, visibility, guildId, description).ConfigureAwait(false);
-    }
-
-    public async Task<string> UploadEncounterAsync(
-        string? directory,
-        bool chineseRegion,
-        long targetStartTime,
-        int visibility,
-        int region,
-        string guildId,
-        string description)
-    {
-        directory = string.IsNullOrWhiteSpace(directory) ? defaultDirectory() : directory;
-        if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
-        if (!IsLoggedIn) throw new InvalidOperationException("Sign in to FFLogs before uploading.");
-
-        var files = Directory.GetFiles(directory, "*.log")
-            .OrderByDescending(File.GetLastWriteTimeUtc)
-            .ToArray();
-        var regionCode = chineseRegion ? "CN" : "NA";
-        foreach (var file in files)
+        if (helper.ProcessId == 0)
         {
-            var fights = await client!.PrepareUploadsAsync(file, regionCode).ConfigureAwait(false);
-            if (fights.Count == 0) continue;
-            var match = fights
-                .OrderBy(fight => Math.Abs(fight.FightStartTime - targetStartTime))
-                .First();
-            if (Math.Abs(match.FightStartTime - targetStartTime) > 600_000) continue;
-            return await client.UploadPreparedAsync(
-                Path.GetFileName(file), [match], region, visibility, guildId, description).ConfigureAwait(false);
+            lock (sync) status = SignedOut;
+            return;
         }
 
-        throw new InvalidOperationException("No matching fight was found in the saved Network logs.");
+        var now = Environment.TickCount64;
+        lock (sync)
+        {
+            if (statusPoll is { IsCompleted: false } || now - lastStatusPoll < StatusIntervalMs) return;
+            lastStatusPoll = now;
+            statusPoll = RunAsync(async token =>
+            {
+                try
+                {
+                    await SendAsync(new FflogsUploadRequest { Operation = FflogsUploadProtocol.Status }, token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is FflogsUploadException or OperationCanceledException)
+                {
+                    // The next tick asks again; a dead helper is noticed above.
+                }
+
+                return true;
+            }, CancellationToken.None);
+        }
     }
 
-    public void StartLive(string? directory, bool chineseRegion, int visibility, int region, string guildId, string description, bool previousFights)
+    public Task LoginAsync(string email, string password, bool chineseSite, CancellationToken cancellationToken = default)
+        => RunAsync(async token =>
+        {
+            await SendAsync(new FflogsUploadRequest
+            {
+                Operation = FflogsUploadProtocol.Login,
+                ChineseSite = chineseSite,
+                Email = email,
+                Password = password,
+            }, token).ConfigureAwait(false);
+            return true;
+        }, cancellationToken);
+
+    public Task LogoutAsync()
+        => RunAsync(async token =>
+        {
+            // Without a running helper there is no session to end, and none should be started.
+            if (helper.ProcessId != 0)
+                await SendAsync(new FflogsUploadRequest { Operation = FflogsUploadProtocol.Logout }, token).ConfigureAwait(false);
+            return true;
+        }, CancellationToken.None);
+
+    public Task<IReadOnlyList<FflogsUploadFight>> PrepareAsync(string logDirectory, CancellationToken cancellationToken = default)
+        => RunAsync(async token =>
+        {
+            var answer = await SendAsync(new FflogsUploadRequest
+            {
+                Operation = FflogsUploadProtocol.Prepare,
+                LogDirectory = logDirectory,
+                Engine = await EnsureEngineAsync(token).ConfigureAwait(false),
+            }, token).ConfigureAwait(false);
+            return answer.Fights ?? [];
+        }, cancellationToken);
+
+    public Task<FflogsUploadResult> UploadPreparedAsync(IReadOnlyList<int> fightIndices, FflogsUploadOptions options, CancellationToken cancellationToken = default)
+        => RunAsync(async token => Result(await SendAsync(new FflogsUploadRequest
+        {
+            Operation = FflogsUploadProtocol.UploadPrepared,
+            FightIndices = fightIndices,
+            Options = options,
+        }, token).ConfigureAwait(false), options), cancellationToken);
+
+    public Task<FflogsUploadResult> UploadLatestAsync(string logDirectory, FflogsUploadOptions options, CancellationToken cancellationToken = default)
+        => RunAsync(async token => Result(await SendAsync(new FflogsUploadRequest
+        {
+            Operation = FflogsUploadProtocol.UploadLatest,
+            LogDirectory = logDirectory,
+            Options = options,
+            Engine = await EnsureEngineAsync(token).ConfigureAwait(false),
+        }, token).ConfigureAwait(false), options), cancellationToken);
+
+    public Task<FflogsUploadResult> UploadEncounterAsync(
+        string logDirectory,
+        DateTimeOffset encounterStart,
+        DateTimeOffset encounterEnd,
+        FflogsUploadOptions options,
+        CancellationToken cancellationToken = default)
+        => RunAsync(async token => Result(await SendAsync(new FflogsUploadRequest
+        {
+            Operation = FflogsUploadProtocol.UploadEncounter,
+            LogDirectory = logDirectory,
+            Options = options,
+            EncounterStartUnixMs = encounterStart.ToUnixTimeMilliseconds(),
+            EncounterEndUnixMs = encounterEnd.ToUnixTimeMilliseconds(),
+            Engine = await EnsureEngineAsync(token).ConfigureAwait(false),
+        }, token).ConfigureAwait(false), options), cancellationToken);
+
+    // The newest Network log of a directory, for display only. The directory is read off the draw
+    // thread and the answer kept for a few seconds; until the first read finishes this is null.
+    public FflogsLatestLog? LatestLog(string directory)
     {
-        directory = string.IsNullOrWhiteSpace(directory) ? defaultDirectory() : directory;
-        if (!Directory.Exists(directory)) throw new DirectoryNotFoundException(directory);
-        if (!IsLoggedIn) throw new InvalidOperationException("Sign in to FFLogs before starting live upload.");
-        client!.StartLiveLog(directory, region, chineseRegion ? "CN" : "NA", visibility, guildId, description, previousFights);
+        var now = Environment.TickCount64;
+        lock (sync)
+        {
+            var sameDirectory = string.Equals(latestLogDirectory, directory, StringComparison.OrdinalIgnoreCase);
+            if (sameDirectory && (latestLogScan is { IsCompleted: false } || now - latestLogScannedAt < LatestLogIntervalMs))
+                return latestLog;
+            if (!sameDirectory) latestLog = null;
+            latestLogDirectory = directory;
+            latestLogScannedAt = now;
+            latestLogScan = Task.Run(() =>
+            {
+                FflogsLatestLog? found = null;
+                try
+                {
+                    var newest = new DirectoryInfo(directory).EnumerateFiles("*.log")
+                        .OrderByDescending(static file => file.LastWriteTimeUtc)
+                        .FirstOrDefault();
+                    if (newest is not null) found = new FflogsLatestLog(newest.Name, newest.LastWriteTime);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    // A missing or unreadable directory simply has no latest log to show.
+                }
+
+                lock (sync)
+                {
+                    if (string.Equals(latestLogDirectory, directory, StringComparison.OrdinalIgnoreCase)) latestLog = found;
+                }
+            });
+            return latestLog;
+        }
     }
 
-    public void StopLive() => client?.StopLiveLog();
-    public bool IsLiveLogging => client?.IsLiveLogging == true;
-    public void CancelCurrentOperation()
+    public static string ReportUrl(bool chineseSite, string reportCode)
+        => $"https://{(chineseSite ? "cn" : "www")}.fflogs.com/reports/{reportCode}";
+
+    public Task StartLiveAsync(string logDirectory, FflogsUploadOptions options, CancellationToken cancellationToken = default)
+        => RunAsync(async token =>
+        {
+            await SendAsync(new FflogsUploadRequest
+            {
+                Operation = FflogsUploadProtocol.LiveStart,
+                LogDirectory = logDirectory,
+                Options = options,
+                Engine = await EnsureEngineAsync(token).ConfigureAwait(false),
+            }, token).ConfigureAwait(false);
+            return true;
+        }, cancellationToken);
+
+    public Task StopLiveAsync()
+        => RunAsync(async token =>
+        {
+            if (helper.ProcessId != 0)
+                await SendAsync(new FflogsUploadRequest { Operation = FflogsUploadProtocol.LiveStop }, token).ConfigureAwait(false);
+            return true;
+        }, CancellationToken.None);
+
+    private static FflogsUploadResult Result(FflogsUploadResponse answer, FflogsUploadOptions options)
+        => new(
+            answer.ReportCode ?? throw new FflogsUploadException(FflogsUploadProtocol.Failed, "The upload finished without a report code."),
+            answer.FightCount,
+            answer.Status.ChineseSite,
+            options.Visibility,
+            DateTime.Now);
+
+    private Task<T> RunAsync<T>(Func<CancellationToken, Task<T>> work, CancellationToken cancellationToken)
+        => Task.Run(async () =>
+        {
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, lifetime.Token);
+            return await work(linked.Token).ConfigureAwait(false);
+        }, CancellationToken.None);
+
+    private async Task<FflogsUploadEngine> EnsureEngineAsync(CancellationToken cancellationToken)
     {
-        client?.StopLiveLog();
-        client?.Dispose();
-        client = null;
+        lock (sync)
+        {
+            if (engine is not null) return engine;
+        }
+
+        try
+        {
+            var resolved = await resolveEngine(cancellationToken, percent => Volatile.Write(ref engineDownloadPercent, percent))
+                .ConfigureAwait(false);
+            lock (sync) engine = resolved;
+            return resolved;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            throw new FflogsUploadException(FflogsUploadProtocol.EngineUnavailable, ex.GetBaseException().Message);
+        }
+        finally
+        {
+            Volatile.Write(ref engineDownloadPercent, -1);
+        }
+    }
+
+    private async Task<FflogsUploadResponse> SendAsync(FflogsUploadRequest request, CancellationToken cancellationToken)
+    {
+        FflogsUploadResponse? answer;
+        var pipe = await helper.ConnectAsync(cancellationToken).ConfigureAwait(false);
+        await using (pipe.ConfigureAwait(false))
+        {
+            // Closing the pipe is the cancel signal the helper listens for.
+            using (cancellationToken.Register(static state => ((Stream)state!).Dispose(), pipe))
+            {
+                try
+                {
+                    await FflogsUploadProtocol.WriteAsync(pipe, request, cancellationToken).ConfigureAwait(false);
+                    answer = await FflogsUploadProtocol.ReadAsync<FflogsUploadResponse>(pipe, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (cancellationToken.IsCancellationRequested &&
+                                           ex is IOException or ObjectDisposedException or OperationCanceledException)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidDataException)
+                {
+                    throw new FflogsUploadException(FflogsUploadProtocol.Failed,
+                        $"The FFLogs upload helper stopped during the request: {ex.Message}");
+                }
+            }
+        }
+
+        if (answer is null)
+        {
+            throw new FflogsUploadException(FflogsUploadProtocol.Failed,
+                "The FFLogs upload helper closed the connection without an answer.");
+        }
+
+        lock (sync) status = answer.Status;
+        if (answer.ErrorCode is not null)
+            throw new FflogsUploadException(answer.ErrorCode, answer.ErrorMessage ?? answer.ErrorCode);
+        return answer;
     }
 
     public void Dispose()
     {
-        client?.Dispose();
-        client = null;
+        lifetime.Cancel();
+        // Killing the helper also ends a live upload; FF Logs closes a report nobody feeds.
+        helper.Dispose();
     }
 }
+
+// A finished upload as the interface shows it: where the report is, how much went into it, and
+// the visibility it was created with (FflogsSettings.UploadVisibility numbering).
+public sealed record FflogsUploadResult(string ReportCode, int FightCount, bool ChineseSite, int Visibility, DateTime FinishedAt)
+{
+    public string Url => FflogsUploadService.ReportUrl(ChineseSite, ReportCode);
+}
+
+public sealed record FflogsLatestLog(string Name, DateTime WrittenAt);

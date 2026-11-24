@@ -16,6 +16,11 @@ internal static class Program
             return await AiRelayServer.RunAsync(args).ConfigureAwait(false);
         }
 
+        if (args.Contains(FflogsUploadProtocol.ModeArgument))
+        {
+            return await FflogsUpload.FflogsUploadServer.RunAsync(args).ConfigureAwait(false);
+        }
+
         var options = HostOptions.Parse(args);
         if (string.IsNullOrWhiteSpace(options.PipeName) ||
             string.IsNullOrWhiteSpace(options.SessionId))

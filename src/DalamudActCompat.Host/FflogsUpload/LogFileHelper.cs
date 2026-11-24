@@ -1,3 +1,6 @@
+// Ported from ACTLogsUploader (MIT, see THIRD_PARTY_NOTICES.md); kept close to upstream.
+#nullable disable
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -6,7 +9,7 @@ using System.Text;
 using System.Threading.Tasks;
 
 
-namespace DalamudActCompat.Fflogs.Upload
+namespace DalamudActCompat.Host.FflogsUpload
 {
     public static class LogFileHelper
     {
@@ -33,12 +36,8 @@ namespace DalamudActCompat.Fflogs.Upload
             }
         }
 
-        public static string AutoDetectLogDirectory()
-        {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var actLogs = Path.Combine(appData, "Advanced Combat Tracker", "FFXIVLogs");
-            return Directory.Exists(actLogs) ? actLogs : string.Empty;
-        }
+        // Upstream's AutoDetectLogDirectory is left out on purpose: DACT always passes its own
+        // Network log directory and never guesses another ACT installation's.
 
         public static string GetLatestLogFileFromPath(string path)
         {

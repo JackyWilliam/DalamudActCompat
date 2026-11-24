@@ -1,3 +1,8 @@
+// Ported from ACTLogsUploader (MIT, see THIRD_PARTY_NOTICES.md), whose sources are not
+// nullable-annotated. The parser message flow is kept the way upstream tested it against the
+// live service, which also keeps later upstream fixes easy to carry over.
+#nullable disable
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -11,7 +16,7 @@ using System.Threading.Tasks;
 
 using Microsoft.ClearScript.V8;
 
-namespace DalamudActCompat.Fflogs.Upload
+namespace DalamudActCompat.Host.FflogsUpload
 {
     // Runs FF Logs' own JS parser (downloaded from /desktop-client/parser) in an embedded
     // V8 engine to turn raw Network_*.log lines into the event/master-table upload format.
@@ -49,10 +54,15 @@ namespace DalamudActCompat.Fflogs.Upload
 
         public int ParserVersion { get; private set; }
 
-        public ParserEngine(HttpClient http, string baseUrl)
+        // The downloaded parser is cached inside DACT's own configuration directory, never in a
+        // shared location another ACT installation or uploader also reads.
+        private readonly string _cacheDirectory;
+
+        public ParserEngine(HttpClient http, string baseUrl, string cacheDirectory)
         {
             _http = http;
             _baseUrl = baseUrl.TrimEnd('/');
+            _cacheDirectory = cacheDirectory;
         }
 
         public sealed class FightUpload
@@ -103,9 +113,7 @@ namespace DalamudActCompat.Fflogs.Upload
             SendMessage(new { message = "set-report-code", id = 0, reportCode });
         }
 
-        private string CacheDir =>
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                "DalamudActCompat", "FflogsParser");
+        private string CacheDir => _cacheDirectory;
 
         private async Task EnsureParserAsync()
         {
@@ -360,7 +368,8 @@ namespace DalamudActCompat.Fflogs.Upload
 
         // Two-pass parse: scan raids, then replay each in isolation to build a per-fight
         // master table scoped to that raid.
-        public async Task<List<FightUpload>> ProcessLogAsync(string logPath, string reportCode, string regionCode)
+        public async Task<List<FightUpload>> ProcessLogAsync(string logPath, string reportCode, string regionCode,
+            CancellationToken cancellationToken = default)
         {
             await StartParserAsync().ConfigureAwait(false);
             var uploads = new List<FightUpload>();
@@ -379,7 +388,7 @@ namespace DalamudActCompat.Fflogs.Upload
                 SendMessage(new { message = "set-report-code", id = 0, reportCode });
                 if (startDateMs.HasValue) SendSetStartDate(startDateMs.Value);
 
-                await ParseFileInBatchesAsync(logPath, regionCode, true, Array.Empty<object>()).ConfigureAwait(false);
+                await ParseFileInBatchesAsync(logPath, regionCode, true, Array.Empty<object>(), cancellationToken).ConfigureAwait(false);
 
                 var scannedResponses = SendMessageAndCollect(new { message = "collect-scanned-raids", id = 1 });
                 var scannedRaidsElement = FindResponseByChannel(scannedResponses, "collect-scanned-raids-completed");
@@ -411,7 +420,7 @@ namespace DalamudActCompat.Fflogs.Upload
                     using (var raidsDoc = JsonDocument.Parse(raidsToUploadJson))
                     {
                         var raidsElement = raidsDoc.RootElement.Clone();
-                        await ParseFileInBatchesAsync(logPath, regionCode, false, raidsElement).ConfigureAwait(false);
+                        await ParseFileInBatchesAsync(logPath, regionCode, false, raidsElement, cancellationToken).ConfigureAwait(false);
                     }
 
                     var fightsResponses = SendMessageAndCollect(new
@@ -487,7 +496,8 @@ namespace DalamudActCompat.Fflogs.Upload
             string logPath,
             string regionCode,
             Func<int, Task<string>> createReport,
-            Func<string, FightData, int, long, long, Task> onFightComplete)
+            Func<string, FightData, int, long, long, Task> onFightComplete,
+            CancellationToken cancellationToken = default)
         {
             await StartParserAsync().ConfigureAwait(false);
             try
@@ -508,6 +518,7 @@ namespace DalamudActCompat.Fflogs.Upload
                 int nextSegmentId = 1;
                 while (true)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var batch = await LogFileHelper.ReadBatchSharedAsync(logPath, position).ConfigureAwait(false);
                     if (batch.Lines.Count > 0)
                     {
@@ -595,12 +606,15 @@ namespace DalamudActCompat.Fflogs.Upload
             return long.TryParse(eventsString.Substring(lineStart, pipe - lineStart), out lastRelativeMs);
         }
 
-        private async Task ParseFileInBatchesAsync(string logPath, string regionCode, bool scanning, object raidsToUpload)
+        private async Task ParseFileInBatchesAsync(string logPath, string regionCode, bool scanning, object raidsToUpload,
+            CancellationToken cancellationToken)
         {
             long position = 0;
             long lineCount = 0;
             while (true)
             {
+                // A batch is at most 5000 lines, so a cancelled parse stops within one of them.
+                cancellationToken.ThrowIfCancellationRequested();
                 var batch = await LogFileHelper.ReadBatchSharedAsync(logPath, position).ConfigureAwait(false);
                 if (batch.Lines.Count > 0)
                 {

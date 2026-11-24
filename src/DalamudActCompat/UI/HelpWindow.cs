@@ -508,16 +508,16 @@ public sealed class HelpWindow : Window
             Bullets(
                 text.Get("在「战斗统计」页打开「显示战斗统计」；找不到窗口时点「定位到战斗统计」，或输入 /actcompat meter。",
                     "On Combat Meter, turn on Show Combat Meter. If you lose the window, click Locate Combat Meter or type /actcompat meter."),
-                text.Get("点「自定义…」打开自定义布局，取消「锁定」后可以拖动、缩放，摆好再锁定。开启「锁定时鼠标穿透」后，点击会穿过统计窗传给游戏。",
-                    "Click Customize… to open the layout editor, unlock to move and resize the meter, then lock it again. With Click-through when locked, clicks pass through to the game."),
+                text.Get("点「自定义布局…」打开布局编辑器，取消「锁定」后可以拖动、缩放，摆好再锁定。开启「锁定时鼠标穿透」后，点击会穿过统计窗传给游戏。",
+                    "Click Customize layout… to open the layout editor, unlock to move and resize the meter, then lock it again. With Click-through when locked, clicks pass through to the game."),
                 text.Get("「脱战隐藏」只是把窗口藏起来，统计仍在继续。", "Hide out of combat only hides the window; the meter keeps counting."),
                 text.Get("打开「脱战隐藏」后，旁边可以选脱战后多久隐藏，例如「30 秒后」：脱战后再显示一会儿，方便看完上一场。悬浮窗页的「隐藏时机」是同样的设置。",
                     "With Hide out of combat on, the choice next to it sets how long after combat the window hides, for example After 30 s, so the last pull can still be read. Hide timing on the Overlays page works the same way."));
             Image("control-meter", text.Get("战斗统计页", "The Combat Meter page"));
         });
         DrawCard("help-meter-templates", text.Get("榜单模板与显示的数据", "Templates and columns"), () => Bullets(
-            text.Get("「经典榜」「横版」「职能分栏」三选一；点「自定义…」可以调字号、透明度、背景色，以及要显示的槽位。",
-                "Choose Classic, Horizontal or Role split, then click Customize… to change font size, opacity, background colour and the slots shown."),
+            text.Get("「经典榜」「横版」「职能分栏」三选一；点「自定义布局…」可以调字号、透明度、背景色，以及要显示的槽位。",
+                "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour and the slots shown."),
             text.Get("经典榜标题栏可以在 DPS 榜 / HPS 榜、8 人本 / 24 人本之间切换。",
                 "The Classic header switches between DPS and HPS ranking and between 8-player and 24-player modes."),
             text.Get("「显示范围」决定显示哪些玩家：按榜单设置，或跟随主页的「游戏解析范围」。",
@@ -545,7 +545,7 @@ public sealed class HelpWindow : Window
         DrawCard("help-meter-fflogs", text.Get("FFLogs DPS Parse 预估", "FFLogs DPS Parse estimate"), () =>
         {
             Steps(
-                text.Get("在「战斗统计」页的 FFLogs 卡片里开启「启用 FFLogs 在线估算」。", "In the FFLogs card on Combat Meter, turn on Enable FFLogs online estimate."),
+                text.Get("在「FFLogs」页的 Parse 预估卡片里开启「启用 FFLogs 在线估算」。", "On the FFLogs page, in the Parse estimate card, turn on Enable FFLogs online estimate."),
                 text.Get("点「创建 / 管理 API Client」，登录 FFLogs 创建免费 Client；没有网站时回调地址填 https://example.com。",
                     "Click Create / manage API client, sign in to FFLogs and create a free client. If you have no website, use https://example.com as the redirect URL."),
                 text.Get("把 Client ID 和 Client Secret 填进对应输入框，点「测试并刷新」。", "Paste the Client ID and Client Secret into their fields, then click Test and refresh."));
@@ -553,6 +553,20 @@ public sealed class HelpWindow : Window
             Callout(CalloutKind.Tip, text.Get(
                 "预估只是参考：它用本场 DPS 对照缓存的排名分布。上传到 FFLogs 后的成绩以官网为准。",
                 "The estimate is a guide that compares this fight's DPS with cached rankings. Your uploaded FFLogs report is authoritative."));
+        });
+        DrawCard("help-fflogs-upload", text.Get("FFLogs 日志上传", "FFLogs log upload"), () =>
+        {
+            Steps(
+                text.Get("在「FFLogs」页的日志上传卡片里用 FFLogs 网站账号登录。", "On the FFLogs page, sign in with your FFLogs website account in the Log upload card."),
+                text.Get("点「上传最新日志」上传整份日志，或点「选择战斗…」只上传其中几场。", "Click Upload latest log for the whole log, or Choose fights… to upload only some of them."),
+                text.Get("打开「实时上传」后，每场战斗结束会自动上传到同一份报告；在「战斗记录」里可以用「上传到 FFLogs」上传单场。",
+                    "With Live upload on, each fight goes into the same report as it ends; in Encounter history, Upload to FFLogs sends a single pull."));
+            Callout(CalloutKind.Tip, text.Get(
+                "第一次使用会下载约 15 MB 的解析引擎。报告的可见性、区域和公会在「上传设置」里选。",
+                "The first use downloads a parser engine of about 15 MB. Pick the report's visibility, region and guild under Upload settings."));
+            Callout(CalloutKind.Warning, text.Get(
+                "FFLogs 密码只在你打开「记住密码」时保存，并且加密后只留在这台电脑上。",
+                "Your FFLogs password is kept only when Remember password is on, encrypted and on this PC only."));
         });
     }
 
@@ -1004,6 +1018,7 @@ public sealed class HelpWindow : Window
             Entry(HelpPage.CombatMeter, "help-meter-metrics", "数值是怎么算的", "How numbers are calculated", "DPS、EncDPS、rDPS、HPS、暴击直击和 --。", "DPS, EncDPS, rDPS, HPS, crit and direct hit rates, and --.", "口径 暴击 直击 直暴 crit direct hit"),
             Entry(HelpPage.CombatMeter, "help-meter-reset", "统计重置与历史", "Resets and history", "DACT默认、脱战倒计时重置、重置当前战斗和历史。", "DACT default, timed reset, resetting the current fight and history.", "重置 清空 历史 团灭 reset history"),
             Entry(HelpPage.CombatMeter, "help-meter-fflogs", "FFLogs DPS Parse 预估", "FFLogs Parse estimate", "创建 API Client、填写凭据并测试。", "Create an API client, enter credentials and test.", "FFLogs Parse Client ID Secret 排名 percentile"),
+            Entry(HelpPage.CombatMeter, "help-fflogs-upload", "FFLogs 日志上传", "FFLogs log upload", "登录、上传最新日志或选中的战斗、实时上传。", "Sign in, upload the latest log or chosen fights, and live upload.", "FFLogs 上传 日志 报告 实时 密码 upload report live"),
             Entry(HelpPage.Overlays, "help-overlay-cactbot", "Cactbot", "Cactbot", "文字提醒、时间轴、Cactbot 设置和自定义目录。", "Alerts, timeline, Cactbot settings and custom directory.", "cactbot raidboss timeline alerts 时间轴 提醒 目录"),
             Entry(HelpPage.Overlays, "help-overlay-add", "添加网页悬浮窗", "Add a web overlay", "从模板或网址创建悬浮窗。", "Create an overlay from a template or address.", "网页 http https 模板 添加 URL"),
             Entry(HelpPage.Overlays, "help-overlay-edit", "移动、缩放与鼠标穿透", "Move, resize and click-through", "编辑位置、页面缩放和穿透。", "Edit position, page zoom and click-through.", "拖动 缩放 点不到 鼠标 穿透 zoom"),

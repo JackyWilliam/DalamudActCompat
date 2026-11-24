@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 
-namespace DalamudActCompat.Fflogs.Upload
+namespace DalamudActCompat.Host.FflogsUpload
 {
     // Sets X-XSRF-TOKEN on every request from the XSRF-TOKEN cookie.
     public sealed class XsrfDelegatingHandler : DelegatingHandler

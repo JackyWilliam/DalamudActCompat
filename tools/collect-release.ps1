@@ -374,6 +374,7 @@ $requiredRuntimeFiles = @(
     "LICENSES/OverlayPlugin.Core-LICENSE.txt",
     "LICENSES/WindowsCommunityToolkit-MIT.md",
     "LICENSES/ClearScript-LICENSE.txt",
+    "LICENSES/ACTLogsUploader-MIT.txt",
     "LICENSES/Anthropic-SDK-Apache-2.0.txt",
     "LICENSES/dotnet-MIT.txt",
     "LICENSES/xivanalysis-MIT.txt",

@@ -1,3 +1,8 @@
+// Ported from ACTLogsUploader (MIT, see THIRD_PARTY_NOTICES.md), whose sources are not
+// nullable-annotated. The request flow is kept the way upstream tested it against the live
+// service, which also keeps later upstream fixes easy to carry over.
+#nullable disable
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -9,7 +14,7 @@ using System.Threading;
 using System.Threading.Tasks;
 
 
-namespace DalamudActCompat.Fflogs.Upload
+namespace DalamudActCompat.Host.FflogsUpload
 {
     public sealed class FightData
     {
@@ -37,7 +42,12 @@ namespace DalamudActCompat.Fflogs.Upload
         private const string CLIENT_VERSION = "9.5.0";
         private const int MaxRetries = 3;
 
+        // Ending a report is cleanup: it must still go out after the caller cancelled, but it
+        // may not hold the helper forever when the site stopped answering.
+        private static readonly TimeSpan TerminateTimeout = TimeSpan.FromSeconds(30);
+
         private readonly string _baseUrl;
+        private readonly string _cacheDirectory;
         private readonly CookieContainer _cookies;
         private readonly ParserEngine _parser;
         private ParserEngine _liveParser;
@@ -48,21 +58,29 @@ namespace DalamudActCompat.Fflogs.Upload
         public string Username { get; private set; }
         public List<GuildInfo> Guilds { get; } = new List<GuildInfo>();
 
-        public bool IsLiveLogging { get; private set; }
-        public int LiveFightCount { get; private set; }
+        // What the site answered to a refused sign-in. Shown to the player, never logged.
+        public string LastLoginError { get; private set; }
+
+        // Fights in the last whole-log upload; the interface shows it next to the report.
+        public int LastUploadFightCount { get; private set; }
+
+        // The status request reads these from another thread while the live task writes them.
+        private volatile bool _isLiveLogging;
+        private int _liveFightCount;
+        private volatile string _liveReportCode;
+        private volatile string _liveError;
+
+        public bool IsLiveLogging => _isLiveLogging;
+        public int LiveFightCount => Volatile.Read(ref _liveFightCount);
+        public string LiveReportCode => _liveReportCode;
+        public string LiveError => _liveError;
         private CancellationTokenSource _liveLogCts;
         private Task _liveLogTask;
 
-        public FflogsUploadClient(string baseUrl)
+        public FflogsUploadClient(string baseUrl, string cacheDirectory)
         {
-            try
-            {
-                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-                ServicePointManager.SecurityProtocol |= (SecurityProtocolType)12288; // Tls13
-            }
-            catch { }
-
             _baseUrl = baseUrl.TrimEnd('/');
+            _cacheDirectory = cacheDirectory;
             _cookies = new CookieContainer();
             var inner = new HttpClientHandler
             {
@@ -84,11 +102,12 @@ namespace DalamudActCompat.Fflogs.Upload
             HttpClient.DefaultRequestHeaders.Add("Sec-Fetch-Mode", "cors");
             HttpClient.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "empty");
 
-            _parser = new ParserEngine(HttpClient, _baseUrl);
+            _parser = new ParserEngine(HttpClient, _baseUrl, _cacheDirectory);
         }
 
-        public async Task<bool> LoginAsync(string email, string password)
+        public async Task<bool> LoginAsync(string email, string password, CancellationToken cancellationToken = default)
         {
+            LastLoginError = null;
             try
             {
                 UploadLog.Info("[Login] Starting login...");
@@ -101,11 +120,13 @@ namespace DalamudActCompat.Fflogs.Upload
                 };
                 var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
-                var response = await HttpClient.PostAsync("/desktop-client/log-in", content).ConfigureAwait(false);
-                var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                var response = await HttpClient.PostAsync("/desktop-client/log-in", content, cancellationToken).ConfigureAwait(false);
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 if (response.StatusCode != HttpStatusCode.OK)
                 {
-                    UploadLog.Error($"[Login] Failed: {(int)response.StatusCode} - {Trunc(responseBody, 300)}");
+                    // The body can repeat the address that was typed, so only the status is logged.
+                    UploadLog.Error($"[Login] Failed: HTTP {(int)response.StatusCode}");
+                    LastLoginError = $"HTTP {(int)response.StatusCode}: {Trunc(responseBody, 300)}";
                     return false;
                 }
 
@@ -127,7 +148,7 @@ namespace DalamudActCompat.Fflogs.Upload
                                 });
                             }
                         }
-                        UploadLog.Info($"[Login] Logged in as {Username}, {Guilds.Count} guild(s)");
+                        UploadLog.Info($"[Login] Logged in, {Guilds.Count} guild(s)");
                     }
                 }
                 catch (Exception ex)
@@ -135,24 +156,28 @@ namespace DalamudActCompat.Fflogs.Upload
                     UploadLog.Warn($"[Login] Could not parse user data: {ex.Message}");
                 }
 
-                var tokenResponse = await HttpClient.PostAsync("/desktop-client/token", null).ConfigureAwait(false);
+                var tokenResponse = await HttpClient.PostAsync("/desktop-client/token", null, cancellationToken).ConfigureAwait(false);
                 if (tokenResponse.StatusCode != HttpStatusCode.OK)
                     UploadLog.Warn("[Login] Token refresh failed");
 
                 IsLoggedIn = true;
                 return true;
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 UploadLog.Error("[Login] Login failed", ex);
+                LastLoginError = ex.GetBaseException().Message;
                 return false;
             }
         }
 
-        public void Logout() => IsLoggedIn = false;
-
         public async Task<string> CreateReportAsync(string filename, string description, int visibility,
-            int serverOrRegion, string guildId, int parserVersion, int logMode)
+            int serverOrRegion, string guildId, int parserVersion, int logMode,
+            CancellationToken cancellationToken = default)
         {
             if (parserVersion <= 0)
                 throw new Exception("Parser version is unavailable.");
@@ -174,8 +199,8 @@ namespace DalamudActCompat.Fflogs.Upload
             };
             var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 
-            var response = await HttpClient.PostAsync("/desktop-client/create-report", content).ConfigureAwait(false);
-            var responseBody = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+            var response = await HttpClient.PostAsync("/desktop-client/create-report", content, cancellationToken).ConfigureAwait(false);
+            var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             if (response.StatusCode != HttpStatusCode.OK)
                 throw new Exception($"Create report failed: {(int)response.StatusCode} - {Trunc(responseBody, 300)}");
 
@@ -194,31 +219,43 @@ namespace DalamudActCompat.Fflogs.Upload
         }
 
         // Parse a log into its fight list without creating a report (for the fight picker).
-        public Task<List<ParserEngine.FightUpload>> PrepareUploadsAsync(string logPath, string regionCode)
-            => _parser.ProcessLogAsync(logPath, "0000000000", regionCode);
+        public Task<List<ParserEngine.FightUpload>> PrepareUploadsAsync(string logPath, string regionCode,
+            CancellationToken cancellationToken = default)
+            => _parser.ProcessLogAsync(logPath, "0000000000", regionCode, cancellationToken);
 
         // Create a report, upload the given fights, terminate. Segment ids are renumbered 1..N.
         public async Task<string> UploadPreparedAsync(string fileName, IList<ParserEngine.FightUpload> uploads,
-            int serverOrRegion, int visibility, string guildId, string description)
+            int serverOrRegion, int visibility, string guildId, string description,
+            CancellationToken cancellationToken = default)
         {
             if (uploads == null || uploads.Count == 0)
                 throw new Exception("No fights to upload.");
 
             var reportCode = await CreateReportAsync(fileName, description, visibility, serverOrRegion,
-                guildId, _parser.ParserVersion, 2).ConfigureAwait(false);
-            for (int i = 0; i < uploads.Count; i++)
+                guildId, _parser.ParserVersion, 2, cancellationToken).ConfigureAwait(false);
+            try
             {
-                int segmentId = i + 1;
-                var u = uploads[i];
-                await WithRetryAsync(() => UploadMasterTableAsync(reportCode, u.MasterTable, segmentId)).ConfigureAwait(false);
-                await WithRetryAsync(() => UploadSegmentAsync(reportCode, u.Fight, segmentId, u.FightStartTime, u.FightEndTime, false)).ConfigureAwait(false);
+                for (int i = 0; i < uploads.Count; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int segmentId = i + 1;
+                    var u = uploads[i];
+                    await WithRetryAsync(() => UploadMasterTableAsync(reportCode, u.MasterTable, segmentId, cancellationToken), cancellationToken).ConfigureAwait(false);
+                    await WithRetryAsync(() => UploadSegmentAsync(reportCode, u.Fight, segmentId, u.FightStartTime, u.FightEndTime, false, cancellationToken), cancellationToken).ConfigureAwait(false);
+                }
             }
-            await TerminateReportAsync(reportCode).ConfigureAwait(false);
+            finally
+            {
+                // A report that was created but never ended stays "in progress" on the
+                // player's account, so it is closed on failure and cancellation as well.
+                await TerminateReportAsync(reportCode).ConfigureAwait(false);
+            }
             UploadLog.Info($"Upload complete: {reportCode}");
             return reportCode;
         }
 
-        public async Task<string> UploadLogAsync(string logPath, int serverOrRegion, string regionCode, int visibility, string guildId, string description)
+        public async Task<string> UploadLogAsync(string logPath, int serverOrRegion, string regionCode, int visibility, string guildId, string description,
+            CancellationToken cancellationToken = default)
         {
             var fileName = Path.GetFileName(logPath);
             ParserEngine.IncrementalUploadResult result = null;
@@ -237,16 +274,18 @@ namespace DalamudActCompat.Fflogs.Upload
                             serverOrRegion,
                             guildId,
                             parserVersion,
-                            2).ConfigureAwait(false);
+                            2,
+                            cancellationToken).ConfigureAwait(false);
                         return reportCode;
                     },
                     async (masterTable, fight, segmentId, startTime, endTime) =>
                     {
                         await WithRetryAsync(() => UploadMasterTableAsync(
-                            reportCode, masterTable, segmentId)).ConfigureAwait(false);
+                            reportCode, masterTable, segmentId, cancellationToken), cancellationToken).ConfigureAwait(false);
                         await WithRetryAsync(() => UploadSegmentAsync(
-                            reportCode, fight, segmentId, startTime, endTime, false)).ConfigureAwait(false);
-                    }).ConfigureAwait(false);
+                            reportCode, fight, segmentId, startTime, endTime, false, cancellationToken), cancellationToken).ConfigureAwait(false);
+                    },
+                    cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -258,6 +297,7 @@ namespace DalamudActCompat.Fflogs.Upload
                 throw new Exception("Upload did not produce a result.");
             if (result.FightCount == 0)
                 throw new Exception("Parser produced no fights - nothing to upload.");
+            LastUploadFightCount = result.FightCount;
 
             UploadLog.Info($"Upload complete: {result.ReportCode}");
             return result.ReportCode;
@@ -266,11 +306,13 @@ namespace DalamudActCompat.Fflogs.Upload
         public void StartLiveLog(string logDirectory, int serverOrRegion, string regionCode, int visibility, string guildId, string description, bool uploadPreviousFights)
         {
             if (IsLiveLogging) { UploadLog.Warn("Live logging already in progress"); return; }
-            _liveLogCts = new CancellationTokenSource();
-            IsLiveLogging = true;
-            LiveFightCount = 0;
-            CurrentReportCode = null;
-            var liveParser = new ParserEngine(HttpClient, _baseUrl);
+            var liveLogCts = new CancellationTokenSource();
+            _liveLogCts = liveLogCts;
+            _isLiveLogging = true;
+            Volatile.Write(ref _liveFightCount, 0);
+            _liveReportCode = null;
+            _liveError = null;
+            var liveParser = new ParserEngine(HttpClient, _baseUrl, _cacheDirectory);
             _liveParser = liveParser;
 
             _liveLogTask = Task.Run(async () =>
@@ -284,17 +326,23 @@ namespace DalamudActCompat.Fflogs.Upload
                             if (reportCode == null)
                             {
                                 reportCode = await CreateReportAsync("live.log", description, visibility,
-                                    serverOrRegion, guildId, liveParser.ParserVersion, 1).ConfigureAwait(false);
-                                CurrentReportCode = reportCode;
+                                    serverOrRegion, guildId, liveParser.ParserVersion, 1, liveLogCts.Token).ConfigureAwait(false);
+                                _liveReportCode = reportCode;
                                 liveParser.SetReportCode(reportCode);
                             }
-                            await WithRetryAsync(() => UploadMasterTableAsync(reportCode, masterData, segmentId)).ConfigureAwait(false);
-                            await WithRetryAsync(() => UploadSegmentAsync(reportCode, fight, segmentId, startTime, endTime, true)).ConfigureAwait(false);
-                            LiveFightCount++;
-                        }, _liveLogCts.Token).ConfigureAwait(false);
+                            await WithRetryAsync(() => UploadMasterTableAsync(reportCode, masterData, segmentId, liveLogCts.Token), liveLogCts.Token).ConfigureAwait(false);
+                            await WithRetryAsync(() => UploadSegmentAsync(reportCode, fight, segmentId, startTime, endTime, true, liveLogCts.Token), liveLogCts.Token).ConfigureAwait(false);
+                            Interlocked.Increment(ref _liveFightCount);
+                        }, liveLogCts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { UploadLog.Info("[LiveLog] Cancelled"); }
-                catch (Exception ex) { UploadLog.Error("[LiveLog] Error", ex); }
+                catch (Exception ex)
+                {
+                    UploadLog.Error("[LiveLog] Error", ex);
+                    // Live upload runs unattended; without this the interface would only show
+                    // that it stopped.
+                    _liveError = ex.GetBaseException().Message;
+                }
                 finally
                 {
                     liveParser.Dispose();
@@ -305,7 +353,7 @@ namespace DalamudActCompat.Fflogs.Upload
                         await TerminateReportAsync(reportCode).ConfigureAwait(false);
                         UploadLog.Info($"[LiveLog] Ended. Report: {reportCode}");
                     }
-                    IsLiveLogging = false;
+                    _isLiveLogging = false;
                 }
             });
         }
@@ -329,7 +377,7 @@ namespace DalamudActCompat.Fflogs.Upload
             catch { }
         }
 
-        private async Task WithRetryAsync(Func<Task> action, int maxRetries = MaxRetries)
+        private async Task WithRetryAsync(Func<Task> action, CancellationToken cancellationToken, int maxRetries = MaxRetries)
         {
             for (int attempt = 0; attempt <= maxRetries; attempt++)
             {
@@ -339,7 +387,7 @@ namespace DalamudActCompat.Fflogs.Upload
                 {
                     var delay = TimeSpan.FromSeconds(Math.Pow(2, attempt));
                     UploadLog.Warn($"[Retry] {attempt + 1}/{maxRetries} failed: {ex.Message}. Retrying in {delay.TotalSeconds}s");
-                    await Task.Delay(delay).ConfigureAwait(false);
+                    await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                 }
             }
         }
@@ -385,7 +433,8 @@ namespace DalamudActCompat.Fflogs.Upload
             }
         }
 
-        private async Task UploadMasterTableAsync(string reportCode, string masterTableContent, int segmentId)
+        private async Task UploadMasterTableAsync(string reportCode, string masterTableContent, int segmentId,
+            CancellationToken cancellationToken)
         {
             var zipBytes = ZipLogTxt(masterTableContent);
             var boundary = GenerateWebKitBoundary();
@@ -402,13 +451,14 @@ namespace DalamudActCompat.Fflogs.Upload
                 {
                     request.Headers.Accept.Clear();
                     request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
-                    var response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+                    var response = await HttpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
                     response.EnsureSuccessStatusCode();
                 }
             }
         }
 
-        private async Task UploadSegmentAsync(string reportCode, FightData fight, int segmentId, long startTime, long endTime, bool isLive)
+        private async Task UploadSegmentAsync(string reportCode, FightData fight, int segmentId, long startTime, long endTime, bool isLive,
+            CancellationToken cancellationToken)
         {
             var eventsContent = $"{fight.LogVersion}|{fight.GameVersion}\n{fight.EventCount}\n{fight.EventsString}";
             var zipBytes = ZipLogTxt(eventsContent);
@@ -436,7 +486,7 @@ namespace DalamudActCompat.Fflogs.Upload
                 {
                     request.Headers.Accept.Clear();
                     request.Headers.Accept.Add(new System.Net.Http.Headers.MediaTypeWithQualityHeaderValue("application/json"));
-                    var response = await HttpClient.SendAsync(request).ConfigureAwait(false);
+                    var response = await HttpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
                     response.EnsureSuccessStatusCode();
                 }
             }
@@ -446,12 +496,15 @@ namespace DalamudActCompat.Fflogs.Upload
         {
             try
             {
-                await WithRetryAsync(async () =>
+                using (var timeout = new CancellationTokenSource(TerminateTimeout))
                 {
-                    var response = await HttpClient.PostAsync($"/desktop-client/terminate-report/{reportCode}", null).ConfigureAwait(false);
-                    if (!response.IsSuccessStatusCode)
-                        throw new HttpRequestException($"Terminate failed with status {(int)response.StatusCode}");
-                }).ConfigureAwait(false);
+                    await WithRetryAsync(async () =>
+                    {
+                        var response = await HttpClient.PostAsync($"/desktop-client/terminate-report/{reportCode}", null, timeout.Token).ConfigureAwait(false);
+                        if (!response.IsSuccessStatusCode)
+                            throw new HttpRequestException($"Terminate failed with status {(int)response.StatusCode}");
+                    }, timeout.Token).ConfigureAwait(false);
+                }
             }
             catch (Exception ex)
             {

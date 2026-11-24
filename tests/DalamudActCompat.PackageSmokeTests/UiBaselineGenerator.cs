@@ -378,6 +378,44 @@ internal static class UiBaselineGenerator
                     ControlCapture("Friends-来信提醒", "好友 · 来信提醒", false);
                     friendAlertsField.SetValue(control, false);
                 }
+                if (page.ToString() == "Fflogs")
+                {
+                    // The signed-in states of 日志上传, with the sample values of the Figma boards. In
+                    // the game they come from the helper process; here the status is pinned.
+                    var upload = (DalamudActCompat.Fflogs.Upload.FflogsUploadService)typeof(ControlCenterWindow)
+                        .GetField("fflogsUploadService", Private)!.GetValue(control)!;
+                    FieldInfo Field(string name) => typeof(ControlCenterWindow).GetField(name, Private)!;
+                    var guilds = new[] { new DalamudActCompat.Protocol.FflogsUploadGuild("42", "Static") };
+                    DalamudActCompat.Protocol.FflogsUploadStatus Status(bool live) => new(true, true, "Tester", guilds, live, live ? 3 : 0, live ? "Xy9KqLmN42PrTs7V" : null, null);
+                    long Ended(int hour, int minute) => new DateTimeOffset(DateTime.Today.AddHours(hour).AddMinutes(minute)).ToUnixTimeMilliseconds();
+                    config.Fflogs.UploadGuildId = "42";
+                    upload.PinnedStatus = Status(false);
+                    Field("fflogsLastResult").SetValue(control, new DalamudActCompat.Fflogs.Upload.FflogsUploadResult(
+                        "aBcD1234EfGh5678", 2, true, 1, DateTime.Today.AddHours(21).AddMinutes(50)));
+                    ControlCapture("Fflogs-已登录", "FFLogs · 已登录，最近一次上传的结果在卡片底部", false);
+
+                    Field("fflogsPreparedFights").SetValue(control, (IReadOnlyList<DalamudActCompat.Protocol.FflogsUploadFight>)new DalamudActCompat.Protocol.FflogsUploadFight[]
+                    {
+                        new(0, "光暗未来绝境战", Ended(21, 42)), new(1, "光暗未来绝境战", Ended(21, 36)), new(2, "阿卡狄亚零式 · 4", Ended(20, 58)),
+                        new(3, "木人", Ended(20, 40)), new(4, "阿卡狄亚零式 · 3", Ended(20, 12)),
+                    });
+                    Field("fflogsPreparedLogName").SetValue(control, "Network_27580_20261123.log");
+                    var selectedFights = (HashSet<int>)Field("fflogsSelectedFights").GetValue(control)!;
+                    selectedFights.UnionWith([0, 1]);
+                    ControlCapture("Fflogs-选择战斗", "FFLogs · 选择战斗", false);
+                    Field("fflogsPreparedFights").SetValue(control, (IReadOnlyList<DalamudActCompat.Protocol.FflogsUploadFight>)Array.Empty<DalamudActCompat.Protocol.FflogsUploadFight>());
+                    selectedFights.Clear();
+
+                    upload.PinnedStatus = Status(true);
+                    ControlCapture("Fflogs-实时上传中", "FFLogs · 实时上传中", false);
+                    upload.PinnedStatus = Status(false);
+                    Field("fflogsUploadSettingsPage").SetValue(control, true);
+                    ControlCapture("Fflogs-上传设置", "FFLogs · 上传设置", false);
+                    Field("fflogsUploadSettingsPage").SetValue(control, false);
+                    upload.PinnedStatus = null;
+                    Field("fflogsLastResult").SetValue(control, null);
+                    config.Fflogs.UploadGuildId = string.Empty;
+                }
                 if (page.ToString() == "Diagnostics")
                 {
                     // 场景方案 sample matching the Figma board.

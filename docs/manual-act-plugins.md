@@ -4,6 +4,9 @@
 二者均由第三个通用 ACT Host 加载，需要手动导入和确认信任；未加入随包清单、在线下载或自动安装。
 本次为开发分支改动，尚未发布新版本。
 
+DACT 自带的 FFLogs 日志上传是另一条路径：它不加载上传器插件，而是在 Host 的 `--fflogs-upload` 辅助进程里运行
+（原因与协议见 `src/DalamudActCompat.Protocol/FflogsUploadProtocol.cs`），与本文的手动导入互不影响。
+
 ## 导入
 
 - ACTLogsUploader：在 DACT 的 ACT 扩展导入入口选择完整 `ACTLogsUploader-0.3.3-loose.zip`。

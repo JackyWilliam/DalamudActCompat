@@ -201,6 +201,13 @@ internal static class HelpScreenshotGenerator
             ["logger"] = logger,
             ["text"] = text,
             ["fflogsEstimateService"] = fflogs,
+            // Never used for a request here: with no Host executable it cannot start its helper.
+            ["fflogsUploadService"] = new DalamudActCompat.Fflogs.Upload.FflogsUploadService(
+                logger,
+                () => null,
+                Path.Combine(Path.GetTempPath(), "dact-help", "fflogs-upload.dat"),
+                Path.Combine(Path.GetTempPath(), "dact-help", "fflogs-parser"),
+                (_, _) => Task.FromException<DalamudActCompat.Protocol.FflogsUploadEngine>(new InvalidOperationException("No parser engine in previews."))),
             ["combatQualitySnapshot"] = null,
             ["logoTexture"] = logo,
             ["cloud"] = cloud,

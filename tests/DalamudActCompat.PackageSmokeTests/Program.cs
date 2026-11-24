@@ -67,6 +67,11 @@ try
         await AiRelaySmokeTests.RunAsync(testRoot);
         return 0;
     }
+    if (args.Contains("--fflogs-upload-only", StringComparer.Ordinal))
+    {
+        await FflogsUploadSmokeTests.RunAsync(testRoot);
+        return 0;
+    }
     if (args.Contains("--postnamazu-command-only", StringComparer.Ordinal))
     {
         PostNamazuCommandSmokeTests.Run();
@@ -373,6 +378,7 @@ try
     ValidateHostMemoryProtectionPolicy();
     await HostLifecycleSmokeTests.RunAsync(testRoot);
     await AiRelaySmokeTests.RunAsync(testRoot);
+    await FflogsUploadSmokeTests.RunAsync(testRoot);
     ValidateVersionedCompatibilityHostExtraction(testRoot);
     await ValidateResourcePackLifecycleAsync(testRoot);
     ValidateSilverDasherPermissionIsolation();
@@ -3867,7 +3873,7 @@ static void ValidateIndependentMeterWindows()
         cleanFingerprint != changedFingerprint,
         "Meter editor dirty-state detection prompts for tab browsing or misses a real style change.");
     Assert(
-        controlCenterSource.Contains("DactUi.Segmented(\"meter-template\"", StringComparison.Ordinal) &&
+        controlCenterSource.Contains("DrawMeterTemplateTile(kinds[index], tileWidth)", StringComparison.Ordinal) &&
         controlCenterSource.Contains("自定义", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawPlayerIdentityControls", StringComparison.Ordinal) &&
         controlCenterSource.Contains("DrawFflogsSettings", StringComparison.Ordinal) &&
