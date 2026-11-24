@@ -2209,5 +2209,6 @@
   "With Live upload on, each fight goes into the same report as it ends; in Encounter history, Upload to FFLogs sends a single pull.": "「ライブアップロード」をオンにすると、戦闘が終わるたびに同じレポートへ自動でアップロードされます。「戦闘履歴」では「FFLogs にアップロード」で 1 戦だけをアップロードできます。",
   "The first use downloads a parser engine of about 15 MB. Pick the report's visibility, region and guild under Upload settings.": "初回は約 15 MB の解析エンジンをダウンロードします。レポートの公開範囲・リージョン・ギルドは「アップロード設定」で選びます。",
   "Your FFLogs password is kept only when Remember password is on, encrypted and on this PC only.": "FFLogs のパスワードは「パスワードを保存」をオンにしたときだけ保存され、暗号化してこの PC にのみ残ります。",
-  "Sign in, upload the latest log or chosen fights, and live upload.": "ログイン、最新ログや選んだ戦闘のアップロード、ライブアップロード。"
+  "Sign in, upload the latest log or chosen fights, and live upload.": "ログイン、最新ログや選んだ戦闘のアップロード、ライブアップロード。",
+  "Volume": "音量"
 }

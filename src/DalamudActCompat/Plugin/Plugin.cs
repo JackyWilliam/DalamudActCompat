@@ -800,10 +800,10 @@ public sealed class Plugin : IDalamudPlugin
                 cloudClient.CancelDeviceLimit));
         friendsNotificationSound = new FriendsNotificationSound(pluginAssemblyDirectory, message => logger.Warning(message));
         friendsUi = new FriendsUiManager(friendsController, settingsWindow.OpenFriends, configuration,
-            playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound),
+            playNotificationSound: () => friendsNotificationSound.Play(configuration.FriendNotificationSound, configuration.FriendNotificationSoundVolume),
             stopNotificationSound: friendsNotificationSound.Stop,
             administratorIcon: administratorIcon, sponsorIcon: sponsorIcon);
-        settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, replace: true);
+        settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, configuration.FriendNotificationSoundVolume, replace: true);
         friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
         settingsWindow.Friends = friendsUi;
         settingsWindow.Paths = paths;

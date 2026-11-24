@@ -2209,5 +2209,6 @@
   "With Live upload on, each fight goes into the same report as it ends; in Encounter history, Upload to FFLogs sends a single pull.": "打開「即時上傳」後，每場戰鬥結束會自動上傳到同一份報告；在「戰鬥紀錄」裡可以用「上傳到 FFLogs」上傳單場。",
   "The first use downloads a parser engine of about 15 MB. Pick the report's visibility, region and guild under Upload settings.": "第一次使用會下載約 15 MB 的解析引擎。報告的可見性、區域和公會在「上傳設定」裡選。",
   "Your FFLogs password is kept only when Remember password is on, encrypted and on this PC only.": "FFLogs 密碼只在你打開「記住密碼」時儲存，並且加密後只留在這台電腦上。",
-  "Sign in, upload the latest log or chosen fights, and live upload.": "登入、上傳最新日誌或選中的戰鬥、即時上傳。"
+  "Sign in, upload the latest log or chosen fights, and live upload.": "登入、上傳最新日誌或選中的戰鬥、即時上傳。",
+  "Volume": "音量"
 }

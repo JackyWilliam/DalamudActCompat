@@ -1,4 +1,5 @@
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 
 namespace DalamudActCompat.UI;
 
@@ -7,11 +8,15 @@ internal sealed class FriendsNotificationSound(string assemblyDirectory, Action<
     private readonly object gate = new();
     private WaveOutEvent? player;
     private Mp3FileReader? reader;
+    private VolumeSampleProvider? gain;
     private int selection = -1, queued;
     private long generation;
     private bool disposed;
 
-    internal void Play(int selected, bool replace = false)
+    // Linear, so 100% is the file as shipped and the slider never makes it louder than before.
+    internal static float Gain(int volumePercent) => Math.Clamp(volumePercent, 0, 100) / 100f;
+
+    internal void Play(int selected, int volumePercent = 100, bool replace = false)
     {
         // Decode/open the device off the render thread. One pending request and
         // one player prevent burst messages or repeated preview clicks from stacking.
@@ -30,9 +35,14 @@ internal sealed class FriendsNotificationSound(string assemblyDirectory, Action<
                     {
                         ReleasePlayer();
                         reader = new Mp3FileReader(Path.Combine(assemblyDirectory, "Assets", "Sounds", $"friend-message-{next + 1}.mp3"));
-                        player = new WaveOutEvent(); player.Init(reader); selection = next;
+                        // The volume is applied to the samples. WaveOutEvent.Volume goes through
+                        // waveOutSetVolume, which moves this process's level in the Windows mixer,
+                        // and this process is the game.
+                        gain = new VolumeSampleProvider(reader.ToSampleProvider());
+                        player = new WaveOutEvent(); player.Init(gain); selection = next;
                     }
                     else player.Stop();
+                    gain!.Volume = Gain(volumePercent);
                     reader!.Position = 0; player.Play();
                 }
             }
@@ -52,7 +62,7 @@ internal sealed class FriendsNotificationSound(string assemblyDirectory, Action<
         try { lock (gate) player?.Stop(); }
         catch (Exception error) { report("好友提示音停止失败：" + error.Message); }
     }
-    private void ReleasePlayer() { player?.Dispose(); player = null; reader?.Dispose(); reader = null; selection = -1; }
+    private void ReleasePlayer() { player?.Dispose(); player = null; reader?.Dispose(); reader = null; gain = null; selection = -1; }
     public void Dispose()
     {
         Interlocked.Increment(ref generation);

@@ -2209,5 +2209,6 @@
   "With Live upload on, each fight goes into the same report as it ends; in Encounter history, Upload to FFLogs sends a single pull.": "Avec « Envoi en direct », chaque combat est ajouté au même rapport dès qu'il se termine ; dans l'Historique des combats, « Envoyer vers FFLogs » envoie une seule tentative.",
   "The first use downloads a parser engine of about 15 MB. Pick the report's visibility, region and guild under Upload settings.": "La première utilisation télécharge un moteur d'analyse d'environ 15 Mo. La visibilité, la région et la guilde du rapport se choisissent dans « Paramètres d'envoi ».",
   "Your FFLogs password is kept only when Remember password is on, encrypted and on this PC only.": "Votre mot de passe FFLogs n'est conservé que si « Mémoriser le mot de passe » est activé, chiffré et uniquement sur ce PC.",
-  "Sign in, upload the latest log or chosen fights, and live upload.": "Connexion, envoi du dernier journal ou de combats choisis, envoi en direct."
+  "Sign in, upload the latest log or chosen fights, and live upload.": "Connexion, envoi du dernier journal ou de combats choisis, envoi en direct.",
+  "Volume": "Volume"
 }

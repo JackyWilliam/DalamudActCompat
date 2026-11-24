@@ -2209,5 +2209,6 @@
   "With Live upload on, each fight goes into the same report as it ends; in Encounter history, Upload to FFLogs sends a single pull.": "Mit „Live-Upload“ wird jeder Kampf nach seinem Ende in denselben Bericht hochgeladen; im „Kampfverlauf“ lädt „Zu FFLogs hochladen“ einen einzelnen Versuch hoch.",
   "The first use downloads a parser engine of about 15 MB. Pick the report's visibility, region and guild under Upload settings.": "Bei der ersten Nutzung wird eine Parser-Engine von etwa 15 MB heruntergeladen. Sichtbarkeit, Region und Gilde des Berichts wählst du unter „Upload-Einstellungen“.",
   "Your FFLogs password is kept only when Remember password is on, encrypted and on this PC only.": "Dein FFLogs-Passwort wird nur gespeichert, wenn „Passwort merken“ eingeschaltet ist – verschlüsselt und nur auf diesem PC.",
-  "Sign in, upload the latest log or chosen fights, and live upload.": "Anmelden, neuestes Protokoll oder ausgewählte Kämpfe hochladen, Live-Upload."
+  "Sign in, upload the latest log or chosen fights, and live upload.": "Anmelden, neuestes Protokoll oder ausgewählte Kämpfe hochladen, Live-Upload.",
+  "Volume": "Lautstärke"
 }
