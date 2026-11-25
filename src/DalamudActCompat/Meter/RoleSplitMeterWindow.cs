@@ -186,7 +186,8 @@ public sealed class RoleSplitMeterWindow : Window
     public override void PostDraw()
     {
         ImGui.PopStyleVar(3);
-        ImGui.PopStyleColor(5);
+        ImGui.PopStyleColor(3);
+        MeterBackground.PopText();
     }
 
     public override void Draw()
@@ -456,7 +457,7 @@ public sealed class RoleSplitMeterWindow : Window
     {
         if (rows.Count == 0)
         {
-            ImGui.TextDisabled(text.Get("暂无玩家", "No players"));
+            MeterBackground.DrawText(MeterBackground.DisabledText, text.Get("暂无玩家", "No players"));
             return false;
         }
 
@@ -492,6 +493,8 @@ public sealed class RoleSplitMeterWindow : Window
                 BackgroundOpacity = Profile.BackgroundOpacity,
                 DataBarOpacity = Profile.DataBarOpacity,
                 BackgroundColor = Profile.BackgroundColor,
+                TextColor = Profile.TextColor,
+                TextOutline = Profile.TextOutline,
                 FontScale = Profile.FontScale,
                 SortMode = useHealing ? MeterSortMode.Hps : MeterSortMode.Dps,
                 DpsSortMetric = Profile.DpsSortMetric,

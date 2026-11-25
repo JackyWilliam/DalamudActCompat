@@ -1636,7 +1636,7 @@
   "Check runtime status first": "Vérifiez d'abord l'état d'exécution",
   "Check that the parser is running": "Vérifier que l'analyseur fonctionne",
   "Check the slots to show; select a row (or that column in the preview) to edit it on the right. Drag to reorder.": "Cochez les emplacements à afficher ; sélectionnez une ligne (ou la colonne dans l'aperçu) pour la modifier à droite. Faites glisser pour réordonner.",
-  "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour and the slots shown.": "Choisissez Classique, Horizontale ou Par rôle, puis « Personnaliser la disposition… » pour régler la taille du texte, l'opacité, la couleur de fond et les emplacements affichés.",
+  "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour, text colour and outline, and the slots shown.": "Choisissez Classique, Horizontale ou Par rôle, puis « Personnaliser la disposition… » pour régler la taille du texte, l'opacité, la couleur de fond, la couleur et le contour du texte, et les emplacements affichés.",
   "Choose screenshots": "Choisir des captures",
   "Clear search": "Effacer la recherche",
   "Cleared": "Réussi",
@@ -2239,5 +2239,11 @@
   "Duties": "Mission",
   "Field": "Zones",
   "No fights of this kind yet.": "Aucun combat de ce type pour l'instant.",
-  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "Les combats récents peuvent afficher « Tous », « Mission » ou « Zones ». Les combats en monde ouvert enchaînés sur une même carte sont regroupés dans un dossier. Missions et combats en monde ouvert conservent chacun autant d'entrées que le permet la limite de l'historique : les combats en monde ouvert n'évincent donc jamais ceux des missions."
+  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "Les combats récents peuvent afficher « Tous », « Mission » ou « Zones ». Les combats en monde ouvert enchaînés sur une même carte sont regroupés dans un dossier. Missions et combats en monde ouvert conservent chacun autant d'entrées que le permet la limite de l'historique : les combats en monde ouvert n'évincent donc jamais ceux des missions.",
+  "Text color": "Couleur du texte",
+  "Changes names and plain text, and the grey of labels follows; accents such as ice blue and gold stay. Saved per meter template.": "Modifie la couleur des noms et du texte courant ; le gris des libellés suit, les accents comme le bleu glacier et l'or restent. Réglage enregistré par modèle.",
+  "Automatic text color": "Couleur du texte automatique",
+  "Text outline": "Contour du texte",
+  "Draws an edge of the opposite brightness around the text, so it stays readable over bright scenery when the panel is transparent. Saved per meter template.": "Entoure le texte d'un contour de luminosité opposée, pour qu'il reste lisible sur un décor clair quand le fond est transparent. Réglage enregistré par modèle.",
+  "Meter text color and outline": "Couleur et contour du texte des statistiques"
 }

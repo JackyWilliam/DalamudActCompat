@@ -1636,7 +1636,7 @@
   "Check runtime status first": "Zuerst den Laufzeitstatus prüfen",
   "Check that the parser is running": "Prüfen, ob der Parser läuft",
   "Check the slots to show; select a row (or that column in the preview) to edit it on the right. Drag to reorder.": "Hake die anzuzeigenden Spalten an; wähle eine Zeile (oder die Spalte in der Vorschau), um sie rechts zu bearbeiten. Ziehen ändert die Reihenfolge.",
-  "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour and the slots shown.": "Wähle Klassisch, Horizontal oder Nach Rollen und ändere unter „Layout anpassen…“ Schriftgröße, Deckkraft, Hintergrundfarbe und angezeigte Spalten.",
+  "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour, text colour and outline, and the slots shown.": "Wähle Klassisch, Horizontal oder Nach Rollen und ändere unter „Layout anpassen…“ Schriftgröße, Deckkraft, Hintergrundfarbe, Textfarbe und Kontur sowie die angezeigten Spalten.",
   "Choose screenshots": "Screenshots auswählen",
   "Clear search": "Suche löschen",
   "Cleared": "Geschafft",
@@ -2239,5 +2239,11 @@
   "Duties": "Inhalte",
   "Field": "Gebiet",
   "No fights of this kind yet.": "Noch keine Kämpfe dieser Art.",
-  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "„Letzte Kämpfe“ lässt sich auf „Alle“, „Inhalte“ oder „Gebiet“ umschalten. Kämpfe in der offenen Welt, die im selben Gebiet direkt aufeinander folgen, werden zu einem Ordner zusammengefasst. Inhalte und Kämpfe in der offenen Welt behalten jeweils so viele Einträge, wie das Verlaufslimit erlaubt – Kämpfe in der offenen Welt verdrängen also keine Inhalts-Einträge."
+  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "„Letzte Kämpfe“ lässt sich auf „Alle“, „Inhalte“ oder „Gebiet“ umschalten. Kämpfe in der offenen Welt, die im selben Gebiet direkt aufeinander folgen, werden zu einem Ordner zusammengefasst. Inhalte und Kämpfe in der offenen Welt behalten jeweils so viele Einträge, wie das Verlaufslimit erlaubt – Kämpfe in der offenen Welt verdrängen also keine Inhalts-Einträge.",
+  "Text color": "Textfarbe",
+  "Changes names and plain text, and the grey of labels follows; accents such as ice blue and gold stay. Saved per meter template.": "Ändert die Farbe von Namen und normalem Text; das Grau der Beschriftungen passt sich an, Akzente wie Eisblau und Gold bleiben. Wird pro Anzeigevorlage gespeichert.",
+  "Automatic text color": "Automatische Textfarbe",
+  "Text outline": "Textkontur",
+  "Draws an edge of the opposite brightness around the text, so it stays readable over bright scenery when the panel is transparent. Saved per meter template.": "Zeichnet eine Kontur in der entgegengesetzten Helligkeit um den Text, damit er bei transparentem Hintergrund auch vor heller Umgebung lesbar bleibt. Wird pro Anzeigevorlage gespeichert.",
+  "Meter text color and outline": "Textfarbe und Kontur der Statistik"
 }

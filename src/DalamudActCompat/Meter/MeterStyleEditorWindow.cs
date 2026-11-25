@@ -120,6 +120,7 @@ public sealed partial class MeterStyleEditorWindow : Window
                 DrawRuntimePreviewFrame(
                     "horizontal-runtime-preview",
                     availableHeight,
+                    profile,
                     MeterBackground.Fill(profile),
                     Vector4.Zero,
                     () => horizontalMeterWindow.DrawEditorPreview(
@@ -141,6 +142,7 @@ public sealed partial class MeterStyleEditorWindow : Window
                 if (DrawRuntimePreviewFrame(
                     "role-damage-runtime-preview",
                     roleHeight,
+                    damageProfile,
                     MeterBackground.Fill(damageProfile),
                     MeterWindow.ApplyBackgroundOpacity(
                         selectedRoleSplitGroup == RoleSplitGroup.DamageTank
@@ -158,6 +160,7 @@ public sealed partial class MeterStyleEditorWindow : Window
                 if (DrawRuntimePreviewFrame(
                     "role-healer-runtime-preview",
                     roleHeight,
+                    healerProfile,
                     MeterBackground.Fill(healerProfile),
                     MeterWindow.ApplyBackgroundOpacity(
                         selectedRoleSplitGroup == RoleSplitGroup.Healer
@@ -182,6 +185,7 @@ public sealed partial class MeterStyleEditorWindow : Window
                 DrawRuntimePreviewFrame(
                     "classic-runtime-preview",
                     availableHeight,
+                    profile,
                     MeterBackground.Fill(profile),
                     MeterWindow.ApplyBackgroundOpacity(Gold, profile.BackgroundOpacity),
                     () => meterWindow.DrawEditorPreview(
@@ -197,6 +201,7 @@ public sealed partial class MeterStyleEditorWindow : Window
     private static bool DrawRuntimePreviewFrame(
         string id,
         float height,
+        MeterWindowProfile profile,
         Vector4 background,
         Vector4 border,
         Action draw)
@@ -209,7 +214,15 @@ public sealed partial class MeterStyleEditorWindow : Window
         ImGui.PushStyleVar(ImGuiStyleVar.ChildRounding, 8 * s);
         ImGui.PushStyleColor(ImGuiCol.ChildBg, background);
         ImGui.PushStyleColor(ImGuiCol.Border, border);
-        MeterBackground.PushText(new MeterWindowProfile { BackgroundColor = new Vector3(background.X, background.Y, background.Z), BackgroundOpacity = background.W });
+        // The preview's text follows the painted background as before, plus the colour and
+        // outline picked for this template, so both show while they are being edited.
+        MeterBackground.PushText(new MeterWindowProfile
+        {
+            BackgroundColor = new Vector3(background.X, background.Y, background.Z),
+            BackgroundOpacity = background.W,
+            TextColor = profile.TextColor,
+            TextOutline = profile.TextOutline,
+        });
         if (ImGui.BeginChild(id, new Vector2(-1, height), true))
         {
             draw();
@@ -218,7 +231,8 @@ public sealed partial class MeterStyleEditorWindow : Window
                       ImGui.IsMouseClicked(ImGuiMouseButton.Left);
         ImGui.EndChild();
         ImGui.PopStyleVar();
-        ImGui.PopStyleColor(4);
+        MeterBackground.PopText();
+        ImGui.PopStyleColor(2);
         return clicked;
     }
 

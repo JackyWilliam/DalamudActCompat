@@ -263,7 +263,8 @@ public sealed class MeterWindow : Window
     public override void PostDraw()
     {
         ImGui.PopStyleVar(4);
-        ImGui.PopStyleColor(10);
+        ImGui.PopStyleColor(8);
+        MeterBackground.PopText();
     }
 
     public override void Draw()
@@ -300,7 +301,7 @@ public sealed class MeterWindow : Window
         ApplyCompactWindowHeight(settings);
         if (rows.Count == 0)
         {
-            ImGui.TextDisabled(text.Get("等待玩家数据…", "Waiting for player data…"));
+            MeterBackground.DrawText(MeterBackground.DisabledText, text.Get("等待玩家数据…", "Waiting for player data…"));
             return;
         }
 
@@ -319,7 +320,7 @@ public sealed class MeterWindow : Window
                 encounter,
                 settings.ClassicWindow.Slots,
                 text,
-                new Vector4(0.70f, 0.74f, 0.80f, 1),
+                MeterBackground.Muted(new Vector4(0.70f, 0.74f, 0.80f, 1)),
                 Gold);
         }
     }
@@ -354,7 +355,7 @@ public sealed class MeterWindow : Window
                 textWidth));
         MeterBackground.AddText(drawList,
             start + new Vector2(10, 23),
-            ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)),
+            ImGui.GetColorU32(MeterBackground.Muted(new Vector4(0.66f, 0.69f, 0.74f, 1))),
             TrimToWidth(
                 text.Get("解析开始后会自动显示排行", "Rankings appear automatically when parsing begins"),
                 textWidth));
@@ -416,7 +417,7 @@ public sealed class MeterWindow : Window
         }
         MeterBackground.AddText(drawList,
             start + new Vector2(36, 24),
-            ImGui.GetColorU32(new Vector4(0.66f, 0.69f, 0.74f, 1)),
+            ImGui.GetColorU32(MeterBackground.Muted(new Vector4(0.66f, 0.69f, 0.74f, 1))),
             TrimToWidth(subtitle, titleRight - start.X - 36));
         DrawCompactModeToggle(drawList, settings, toggleStart, toggleEnd, toggleHovered, editorPreview: embeddedPreview);
         DrawRankingModeIcon(drawList, settings, rankingStart, rankingEnd, rankingHovered);
@@ -458,7 +459,7 @@ public sealed class MeterWindow : Window
                 encounter,
                 settings.ClassicWindow.Slots,
                 text,
-                new Vector4(0.70f, 0.74f, 0.80f, 1),
+                MeterBackground.Muted(new Vector4(0.70f, 0.74f, 0.80f, 1)),
                 Gold,
                 previewInteraction);
         }
@@ -1546,7 +1547,7 @@ public sealed class MeterWindow : Window
             new Vector2(end.X, end.Y),
             ImGui.GetColorU32(new Vector4(Gold.X, Gold.Y, Gold.Z, 0.55f)));
 
-        var color = ImGui.GetColorU32(new Vector4(0.70f, 0.74f, 0.80f, 1));
+        var color = ImGui.GetColorU32(MeterBackground.Muted(new Vector4(0.70f, 0.74f, 0.80f, 1)));
         var lineY = start.Y + (headerHeight - ImGui.GetTextLineHeight()) * 0.5f;
         void DrawColumnHeader(
             string label,
@@ -1851,7 +1852,7 @@ public sealed class MeterWindow : Window
             DrawColumn(
                 formatted.Rank,
                 rankColumn,
-                new Vector4(0.68f, 0.71f, 0.76f, 1));
+                MeterBackground.Muted(new Vector4(0.68f, 0.71f, 0.76f, 1)));
         }
         if (layout.Identity is { } identity)
         {
@@ -1892,7 +1893,7 @@ public sealed class MeterWindow : Window
             DrawColumn(
                 formatted.DamagePercent,
                 damagePercent,
-                new Vector4(0.72f, 0.78f, 0.84f, 1));
+                MeterBackground.Muted(new Vector4(0.72f, 0.78f, 0.84f, 1)));
         }
         if (layout.TotalDamage is { } totalDamage)
         {
@@ -2007,8 +2008,7 @@ public sealed class MeterWindow : Window
     {
         // Reuse the active table/header font so localized skill names keep identical size
         // and glyph coverage; a subpixel second pass adds weight without a separate font atlas.
-        MeterBackground.AddText(drawList, position, color, value);
-        MeterBackground.AddText(drawList, position + new Vector2(SyntheticBoldOffset, 0), color, value);
+        MeterBackground.AddBoldText(drawList, position, color, value, SyntheticBoldOffset);
     }
 
     internal static float NormalizeBackgroundOpacity(float opacity)

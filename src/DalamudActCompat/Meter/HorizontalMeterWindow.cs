@@ -13,7 +13,8 @@ public sealed class HorizontalMeterWindow : Window
 {
     private static readonly Vector4 Gold = new(0.90f, 0.81f, 0.55f, 1);
     private static readonly Vector4 IceBlue = new(0.42f, 0.78f, 0.96f, 1);
-    private static readonly Vector4 Muted = new(0.68f, 0.72f, 0.77f, 1);
+    private static readonly Vector4 DefaultMuted = new(0.68f, 0.72f, 0.77f, 1);
+    private static Vector4 Muted => MeterBackground.Muted(DefaultMuted);
     private readonly MeterService meterService;
     private readonly PluginConfiguration configuration;
     private readonly UiText text;
@@ -139,7 +140,8 @@ public sealed class HorizontalMeterWindow : Window
     public override void PostDraw()
     {
         ImGui.PopStyleVar(3);
-        ImGui.PopStyleColor(6);
+        ImGui.PopStyleColor(4);
+        MeterBackground.PopText();
     }
 
     public override void Draw()
