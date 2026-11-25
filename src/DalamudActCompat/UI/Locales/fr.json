@@ -375,7 +375,7 @@
   "Enabled after verification": "Activé après vérification",
   "Enabling this template disables the other two.": "Activer ce modèle désactive les deux autres.",
   "Encounter history": "Historique des combats",
-  "Duties and open-world fights each keep this many records, with their encounter JSON; Network logs keep this many too.": "Les missions et les combats en monde ouvert conservent chacun ce nombre d’entrées, avec leur JSON de combat ; les journaux Network en conservent autant.",
+  "Duties and open-world fights each keep this many records, with their encounter JSON; Network logs keep this many too.": "Les missions et les combats en monde ouvert conservent chacun ce nombre d'entrées, avec leur JSON de combat ; les journaux Network en conservent autant.",
   "Encrypted cloud sync": "Synchronisation cloud chiffrée",
   "Encrypting and uploading settings…": "Chiffrement et envoi des paramètres…",
   "Ended": "Terminé",
@@ -2238,6 +2238,6 @@
   "All": "Tous",
   "Duties": "Mission",
   "Field": "Zones",
-  "No fights of this kind yet.": "Aucun combat de ce type pour l’instant.",
-  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "Les combats récents peuvent afficher « Tous », « Mission » ou « Zones ». Les combats en monde ouvert enchaînés sur une même carte sont regroupés dans un dossier. Missions et combats en monde ouvert conservent chacun autant d’entrées que le permet la limite de l'historique : les combats en monde ouvert n’évincent donc jamais ceux des missions."
+  "No fights of this kind yet.": "Aucun combat de ce type pour l'instant.",
+  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "Les combats récents peuvent afficher « Tous », « Mission » ou « Zones ». Les combats en monde ouvert enchaînés sur une même carte sont regroupés dans un dossier. Missions et combats en monde ouvert conservent chacun autant d'entrées que le permet la limite de l'historique : les combats en monde ouvert n'évincent donc jamais ceux des missions."
 }
