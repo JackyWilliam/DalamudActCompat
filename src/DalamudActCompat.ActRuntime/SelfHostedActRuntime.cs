@@ -76,8 +76,6 @@ public sealed class SelfHostedActRuntime : IDisposable
     private IReadOnlyList<ActPlayerIdentity> observedPlayerSnapshot = [];
     private IReadOnlyList<ActPlayerIdentity>? lastObservedIdentitiesSource;
     private ObservedPlayerCache? observedPlayerCache;
-    private IINACT.FfxivActPluginWrapper? lastParseFilterParser;
-    private FFXIV_ACT_Plugin.Config.ParseFilterMode lastParseFilterMode;
     private IReadOnlyList<ActPlayerIdentity>? lastDeathTrackedIdentities;
     private ParserScope lastDeathTrackedScope;
     private static MethodInfo? cachedResolveOverlayDispatcher;
@@ -1807,7 +1805,6 @@ public sealed class SelfHostedActRuntime : IDisposable
 
         gameStateProvider.Clear();
         lastObservedIdentitiesSource = null;
-        lastParseFilterParser = null;
         Volatile.Write(ref observedPlayerSnapshot, []);
         lock (encounterSync)
         {
@@ -2154,19 +2151,10 @@ public sealed class SelfHostedActRuntime : IDisposable
             inCombat);
         // Auto and the supplemental paths use the same current roster. ACT only
         // receives a native mode (0..3), including on joins, leaves and restores.
-        var currentParser = parser;
-        if (currentParser is not null)
-        {
-            var effectiveMode = (FFXIV_ACT_Plugin.Config.ParseFilterMode)
-                ParserScopePolicy.ResolveEffectiveScope(getParserScope(), identities);
-            if (!ReferenceEquals(currentParser, lastParseFilterParser) ||
-                lastParseFilterMode != effectiveMode)
-            {
-                currentParser.SetParseFilterMode(effectiveMode);
-                lastParseFilterParser = currentParser;
-                lastParseFilterMode = effectiveMode;
-            }
-        }
+        // Sent every frame on purpose: the wrapper already returns early when the
+        // mode is unchanged, and resending undoes any write made behind our back.
+        parser?.SetParseFilterMode((FFXIV_ACT_Plugin.Config.ParseFilterMode)
+            ParserScopePolicy.ResolveEffectiveScope(getParserScope(), identities));
         TrackPlayerDeaths(identities);
 
         ActEncounterSnapshot? activeChatEncounter = null;
