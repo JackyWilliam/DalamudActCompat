@@ -189,7 +189,7 @@ public sealed partial class ControlCenterWindow
                 ImGui.SetCursorPos(new Vector2(ImGui.GetCursorPosX() + width - DactUi.ButtonWidth(historyLabel, ButtonKind.Ghost), row - 7 * s));
                 if (DactUi.Button(historyLabel + "##ai-review-history", ButtonKind.Ghost))
                 {
-                    historySelectedId = encounter.Id;
+                    RevealHistoryFight(encounter.Id);
                     OpenHistory(0);
                 }
                 ImGui.SetCursorPos(after);

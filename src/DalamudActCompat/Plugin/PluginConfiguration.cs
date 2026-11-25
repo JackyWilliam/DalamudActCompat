@@ -2,6 +2,7 @@ using Dalamud.Configuration;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Meter;
 using DalamudActCompat.Compatibility.PluginHost;
+using DalamudActCompat.Encounters;
 using DalamudActCompat.Fflogs;
 using Newtonsoft.Json;
 using DalamudActCompat.UI;
@@ -29,6 +30,9 @@ public sealed class PluginConfiguration : IPluginConfiguration
     public bool SuppressFoxTtsProPrompt { get; set; }
 
     public int HistoryLimit { get; set; } = 20;
+
+    // The 近期战斗 list reopens on the kind of fights the player last chose to look at.
+    public HistoryFilter HistoryFilter { get; set; } = HistoryFilter.All;
 
     public string LogDirectory { get; set; } = string.Empty;
 
@@ -398,6 +402,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         AutoCloudSyncEnabled = true;
         SuppressFoxTtsProPrompt = false;
         HistoryLimit = 20;
+        HistoryFilter = HistoryFilter.All;
         LogDirectory = defaultLogDirectory;
         ActPluginDirectory = string.Empty;
         UiLanguage = "zh-CN";
@@ -444,6 +449,7 @@ public sealed class PluginConfiguration : IPluginConfiguration
         AutoCloudSyncEnabled = snapshot.AutoCloudSyncEnabled;
         SuppressFoxTtsProPrompt = snapshot.SuppressFoxTtsProPrompt;
         HistoryLimit = snapshot.HistoryLimit;
+        HistoryFilter = snapshot.HistoryFilter;
         LogDirectory = snapshot.LogDirectory;
         ActPluginDirectory = snapshot.ActPluginDirectory;
         UiLanguage = snapshot.UiLanguage;

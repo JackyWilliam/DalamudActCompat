@@ -375,7 +375,7 @@
   "Enabled after verification": "検証後に有効化",
   "Enabling this template disables the other two.": "このテンプレートを有効にすると、他の 2 つが無効になります。",
   "Encounter history": "戦闘履歴",
-  "Encounter history, encounter JSON, and Network logs each keep this many.": "エンカウント履歴、エンカウント JSON、およびネットワークログには、それぞれこれだけの数が保存されます。",
+  "Duties and open-world fights each keep this many records, with their encounter JSON; Network logs keep this many too.": "コンテンツと野外の戦闘記録は、それぞれこの件数まで保存されます（戦闘 JSON も同じ）。Network ログも別にこの件数まで保存されます。",
   "Encrypted cloud sync": "暗号化されたクラウド同期",
   "Encrypting and uploading settings…": "設定を暗号化してアップロードしています…",
   "Ended": "終了しました",
@@ -2234,5 +2234,10 @@
   "Using overlays in a browser, OBS or on another device": "ブラウザー、OBS、別のデバイスで使う",
   "Click WebSocket address below the overlay list on the Overlays page and copy the address shown.": "「オーバーレイ」ページのオーバーレイ一覧の下にある「WebSocket アドレス」をクリックし、表示されたアドレスをコピーします。",
   "Add ?OVERLAY_WS= and that address to the end of the overlay's URL (use & if the URL already has a ?), then open it in a browser or add it to OBS as a browser source.": "オーバーレイの URL の末尾に ?OVERLAY_WS= とそのアドレスを付け（URL にすでに ? がある場合は & を使います）、ブラウザーで開くか、OBS にブラウザソースとして追加します。",
-  "To view it on a phone, tablet or another PC, turn on Allow other devices on the local network to connect in the same dialog, then use the Address on the local network shown there.": "スマートフォンやタブレット、別の PC で表示するには、同じダイアログで「ローカルネットワーク上の他のデバイスからの接続を許可」をオンにし、そこに表示される「ローカルネットワークのアドレス」を使います。"
+  "To view it on a phone, tablet or another PC, turn on Allow other devices on the local network to connect in the same dialog, then use the Address on the local network shown there.": "スマートフォンやタブレット、別の PC で表示するには、同じダイアログで「ローカルネットワーク上の他のデバイスからの接続を許可」をオンにし、そこに表示される「ローカルネットワークのアドレス」を使います。",
+  "All": "すべて",
+  "Duties": "CF",
+  "Field": "野外",
+  "No fights of this kind yet.": "この種類の戦闘記録はまだありません。",
+  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "「最近の戦闘」は「すべて / CF / 野外」で切り替えられます。同じマップで続けて行った野外の戦闘は 1 つのフォルダーにまとめられます。コンテンツと野外はそれぞれ「履歴制限」の件数まで保存されるため、野外でいくら戦ってもコンテンツの記録が押し出されることはありません。"
 }

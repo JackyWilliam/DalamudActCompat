@@ -541,7 +541,9 @@ public sealed class HelpWindow : Window
             text.Get("「脱战指定秒数后重置」：脱战后倒计时 0–3600 秒再清空；倒计时内重新进战会取消。",
                 "Reset after combat: clears 0–3600 seconds after combat ends. Re-entering combat cancels the countdown."),
             text.Get("「重置当前战斗…」立即清空本场，不会删除历史和原始日志。侧栏「战斗记录」或输入 /actcompat history 查看近期战斗。",
-                "Reset current encounter… clears this fight at once without deleting history or raw logs. Open Encounter history in the sidebar or type /actcompat history for recent fights.")));
+                "Reset current encounter… clears this fight at once without deleting history or raw logs. Open Encounter history in the sidebar or type /actcompat history for recent fights."),
+            text.Get("近期战斗可以按「全部 / 副本 / 野外」切换。同一张地图里连着打的野外战斗会收成一个文件夹；副本和野外各自保留「历史记录上限」设定的数量，野外打得再多也不会顶掉副本记录。",
+                "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.")));
         DrawCard("help-meter-fflogs", text.Get("FFLogs DPS Parse 预估", "FFLogs DPS Parse estimate"), () =>
         {
             Steps(

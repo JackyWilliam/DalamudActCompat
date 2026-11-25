@@ -4,6 +4,9 @@ using System.Text.Json;
 using Dalamud.Bindings.ImGui;
 using DalamudActCompat.ActRuntime;
 using DalamudActCompat.Compatibility.Cactbot;
+using DalamudActCompat.Core.Models;
+using DalamudActCompat.Core.State;
+using DalamudActCompat.Encounters;
 using DalamudActCompat.Overlay;
 using DalamudActCompat.Parser;
 using DalamudActCompat.Plugin;
@@ -55,6 +58,24 @@ internal static partial class OverlayManagerSmokeTests
             Set(f.Window, "setSimplifiedMode", (Action<bool>)(_ => { }));
             var draw = typeof(ControlCenterWindow).GetMethod("DrawOverlays", Private)!;
             var home = typeof(ControlCenterWindow).GetMethod("DrawOverview", Private)!;
+            // 战斗记录 · 近期战斗: three open-world fights in one map (they fold into one row), a duty
+            // folder with two pulls, and a lone fight elsewhere with a name too long for its row.
+            var history = typeof(ControlCenterWindow).GetMethod("DrawHistoryPage", Private)!;
+            // The fixture window never ran its constructor, so the page's own state is created here.
+            var openFolders = new HashSet<Guid>(); Set(f.Window, "historyExpandedFolders", openFolders);
+            var sampleFight = SampleEncounterFactory.Create(DateTimeOffset.Now);
+            Encounter Fight(int minutesAgo, string enemy, uint territory, string zone) => sampleFight with
+            {
+                Id = Guid.NewGuid(), StartTime = DateTimeOffset.Now.AddMinutes(-minutesAgo), EndTime = DateTimeOffset.Now.AddMinutes(-minutesAgo).AddSeconds(95),
+                EnemyName = enemy, ZoneName = zone, TerritoryId = territory,
+            };
+            Encounter[] fieldFights = [Fight(4, "木人", 134, "中拉诺西亚"), Fight(9, "木人", 134, "中拉诺西亚"), Fight(15, "奥迪恩", 134, "中拉诺西亚")];
+            Encounter[] dutyPulls = [Fight(40, "欧米茄绝境验证战", 1122, "欧米茄绝境验证战"), Fight(33, "欧米茄绝境验证战", 1122, "欧米茄绝境验证战")];
+            var dutyFolder = dutyPulls[^1] with { Id = Guid.NewGuid(), StartTime = dutyPulls[0].StartTime, SegmentRecords = dutyPulls };
+            var mixedHistory = new EncounterStateStore();
+            mixedHistory.UpdateRecent([.. fieldFights, dutyFolder, Fight(120, "Striking Dummy With A Rather Long Name", 135, "拉诺西亚低地")]);
+            var fieldOnlyHistory = new EncounterStateStore(); fieldOnlyHistory.UpdateRecent(fieldFights);
+            var selectedFight = typeof(ControlCenterWindow).GetField("historySelectedId", Private)!;
             var details = typeof(ControlCenterWindow).GetField("overlayDetailsPage", Private)!;
             var creator = typeof(ControlCenterWindow).GetField("overlayCreatorPage", Private)!;
             var templates = f.Templates.ToArray();
@@ -79,10 +100,12 @@ internal static partial class OverlayManagerSmokeTests
                     DactTheme.DrawGameWindow();
                     // Stacked details can start below the viewport. Scroll the
                     // parent to them so native clipping cannot silently skip the page.
-                    ImGui.SetScrollY(view != "home" && view != "list" && !view.StartsWith("add") && !view.StartsWith("websocket") && size.X < 760 * io.FontGlobalScale
+                    ImGui.SetScrollY(view != "home" && view != "list" && !view.StartsWith("add") && !view.StartsWith("websocket") && !view.StartsWith("history") && size.X < 760 * io.FontGlobalScale
                         ? ImGui.GetScrollMaxY() : 0);
                     if (openPopup) { ImGui.OpenPopup("###dact-add-overlay"); openPopup = false; }
-                    if (view == "home") home.Invoke(f.Window, null); else draw.Invoke(f.Window, null);
+                    if (view == "home") home.Invoke(f.Window, null);
+                    else if (view.StartsWith("history")) history.Invoke(f.Window, null);
+                    else draw.Invoke(f.Window, null);
                     ImGui.End(); ImGui.PopStyleColor(); ControlCenterWindow.PopTheme();
                 }
                 ImGui.Render(); editor.EndFrame();
@@ -99,8 +122,12 @@ internal static partial class OverlayManagerSmokeTests
                 {
                     f.Config.UiLanguage = language.Id; io.FontGlobalScale = scale; size = new(width, 880);
                     foreach (var scenario in new[] { "home", "list", "general", "cactbot", "hotkeys", "source", "edit-url", "rename", "missing", "add", "add-cactbot", "add-template", "add-url",
-                                 "websocket", "websocket-lan", "websocket-custom", "websocket-off" })
+                                 "websocket", "websocket-lan", "websocket-custom", "websocket-off",
+                                 "history", "history-open", "history-field", "history-empty" })
                     {
+                        // DACT_ACCEPTANCE_SCENARIO=<prefix> runs one group of pages, so its captures
+                        // can be looked at without rendering every other page as well.
+                        if (Environment.GetEnvironmentVariable("DACT_ACCEPTANCE_SCENARIO") is { Length: > 0 } group && !scenario.StartsWith(group)) continue;
                         view = scenario; var errors = new List<string>();
                         // Independent states prevent a previous language's scroll
                         // position, modal, or missing-resource case masking controls.
@@ -127,10 +154,39 @@ internal static partial class OverlayManagerSmokeTests
                             _ => new("127.0.0.1", 10501, true),
                         };
                         if (scenario.StartsWith("websocket")) f.Window.RequestOverlayWebSocketDialog();
-                        for (var frame = 0; frame < 5; frame++) Frame();
+                        if (scenario.StartsWith("history"))
+                        {
+                            // Everything at rest, both folders open, the open-world filter with its
+                            // folder open, and a filter that leaves the list empty.
+                            f.Window.EncounterHistory = scenario == "history-empty" ? fieldOnlyHistory : mixedHistory;
+                            f.Config.HistoryFilter = scenario switch
+                            {
+                                "history-field" => HistoryFilter.OpenWorld,
+                                "history-empty" => HistoryFilter.Duty,
+                                _ => HistoryFilter.All,
+                            };
+                            openFolders.Clear();
+                            if (scenario is "history-open" or "history-field") openFolders.UnionWith(fieldFights.Select(fight => fight.Id));
+                            if (scenario == "history-open") openFolders.Add(dutyFolder.Id);
+                            selectedFight.SetValue(f.Window, scenario switch
+                            {
+                                "history-open" => dutyPulls[^1].Id,
+                                "history-field" => fieldFights[1].Id,
+                                _ => (Guid?)null,
+                            });
+                        }
+                        // The details column nests auto-sized cards inside a scrolling child. After the
+                        // font scale changes each level settles a frame after the one around it, and
+                        // measuring before that reports the width from before the scrollbar appeared.
+                        for (var frame = 0; frame < (scenario.StartsWith("history") ? 12 : 5); frame++) Frame();
                         if (scenario.StartsWith("websocket"))
                             Check(context.OpenPopupStack.Size == 1, "The WebSocket dialog was not opened.");
-                        var detailsDrawn = scenario is "home" or "list" || scenario.StartsWith("add") || scenario.StartsWith("websocket");
+                        if (scenario == "history")
+                            Check((Guid?)selectedFight.GetValue(f.Window) == fieldFights[0].Id && openFolders.Count == 0,
+                                "The recent list should open on its newest fight and leave a folder of open-world fights shut.");
+                        if (scenario == "history-empty")
+                            Check(selectedFight.GetValue(f.Window) is null, "A filter with no fights under it still selected one.");
+                        var detailsDrawn = scenario is "home" or "list" || scenario.StartsWith("add") || scenario.StartsWith("websocket") || scenario.StartsWith("history");
                         for (var i = 0; i < context.Windows.Size; i++)
                         {
                             var window = context.Windows[i]; if (!window.Active) continue;

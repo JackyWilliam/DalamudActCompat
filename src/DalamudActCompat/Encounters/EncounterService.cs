@@ -42,14 +42,14 @@ public sealed class EncounterService : IAsyncDisposable
         try
         {
             var loaded = await repository.LoadRecentAsync(cancellationToken).ConfigureAwait(false);
-            recent = loaded.Take(GetRetentionLimit()).ToArray();
+            recent = EncounterHistoryRules.Retain(loaded, GetRetentionLimit());
             stateStore.UpdateRecent(recent);
             if (recent.Count != loaded.Count)
             {
                 await repository.SaveRecentAsync(recent, cancellationToken).ConfigureAwait(false);
             }
 
-            ApplyFileRetention(cancellationToken);
+            ApplyFileRetention(DroppedIds(loaded, recent), cancellationToken);
         }
         catch (Exception ex)
         {
@@ -94,11 +94,10 @@ public sealed class EncounterService : IAsyncDisposable
             await previousSave.ConfigureAwait(false);
             // A duty folder is saved after every pull with one stable ID. Replacing its
             // previous snapshot keeps all attempts under one history entry.
-            recent = recent
-                .Where(item => item.Id != encounter.Id)
-                .Prepend(encounter)
-                .Take(GetRetentionLimit())
-                .ToArray();
+            var previous = recent;
+            recent = EncounterHistoryRules.Retain(
+                recent.Where(item => item.Id != encounter.Id).Prepend(encounter),
+                GetRetentionLimit());
             stateStore.UpdateRecent(recent);
             await repository.SaveRecentAsync(recent, CancellationToken.None).ConfigureAwait(false);
             Directory.CreateDirectory(paths.EncounterLogDirectory);
@@ -107,7 +106,7 @@ public sealed class EncounterService : IAsyncDisposable
                 Path.Combine(paths.EncounterLogDirectory, fileName),
                 JsonSerializer.Serialize(encounter, new JsonSerializerOptions { WriteIndented = true }),
                 CancellationToken.None).ConfigureAwait(false);
-            ApplyFileRetention(CancellationToken.None);
+            ApplyFileRetention(DroppedIds(previous, recent), CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -120,15 +119,16 @@ public sealed class EncounterService : IAsyncDisposable
         try
         {
             await previousSave.ConfigureAwait(false);
-            var retained = recent.Take(GetRetentionLimit()).ToArray();
-            if (retained.Length != recent.Count)
+            var previous = recent;
+            var retained = EncounterHistoryRules.Retain(recent, GetRetentionLimit());
+            if (retained.Count != recent.Count)
             {
                 recent = retained;
                 stateStore.UpdateRecent(recent);
                 await repository.SaveRecentAsync(recent, CancellationToken.None).ConfigureAwait(false);
             }
 
-            ApplyFileRetention(CancellationToken.None);
+            ApplyFileRetention(DroppedIds(previous, recent), CancellationToken.None);
         }
         catch (Exception ex)
         {
@@ -136,19 +136,50 @@ public sealed class EncounterService : IAsyncDisposable
         }
     }
 
-    private void ApplyFileRetention(CancellationToken cancellationToken)
+    private static HashSet<Guid> DroppedIds(IReadOnlyList<Encounter> before, IReadOnlyList<Encounter> after)
+    {
+        var dropped = before.Select(static item => item.Id).ToHashSet();
+        dropped.ExceptWith(after.Select(static item => item.Id));
+        return dropped;
+    }
+
+    private void ApplyFileRetention(HashSet<Guid> dropped, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var limit = GetRetentionLimit();
-        DeleteOldFiles(paths.EncounterLogDirectory, "*.json", limit, "encounter snapshot");
+        var kept = recent.Select(static item => item.Id).ToHashSet();
+        // A snapshot lives exactly as long as its history entry, so duties and open-world fights
+        // keep separate allowances on disk too. Counting files alone cannot do that: the file
+        // name does not say which kind it holds. Files history does not know (left from a lost
+        // history file, or copied in by hand) stay on the plain newest-N rule, which bounds
+        // them without wiping the only copy of fights the list no longer has.
+        DeleteOldFiles(paths.EncounterLogDirectory, "*.json", limit, "encounter snapshot", Pinned);
         DeleteOldFiles(getCombatLogDirectory(), "Network_*.log", limit, "network log");
+
+        bool? Pinned(FileInfo file)
+        {
+            if (SnapshotId(file) is not { } id) return null;
+            if (kept.Contains(id)) return true;
+            return dropped.Contains(id) ? false : null;
+        }
     }
 
+    // Snapshots are written as "<start time>-<encounter id>.json".
+    private static Guid? SnapshotId(FileInfo file)
+    {
+        var name = Path.GetFileNameWithoutExtension(file.Name);
+        var dash = name.LastIndexOf('-');
+        return dash >= 0 && Guid.TryParseExact(name[(dash + 1)..], "N", out var id) ? id : null;
+    }
+
+    // pinned decides a file whatever its age (true keeps it, false removes it); a file it
+    // returns null for is counted against the newest-N limit.
     private void DeleteOldFiles(
         string directory,
         string searchPattern,
         int limit,
-        string category)
+        string category,
+        Func<FileInfo, bool?>? pinned = null)
     {
         if (!Directory.Exists(directory))
         {
@@ -170,8 +201,14 @@ public sealed class EncounterService : IAsyncDisposable
             return;
         }
 
-        foreach (var file in files.Skip(limit))
+        var counted = 0;
+        foreach (var file in files)
         {
+            if (pinned?.Invoke(file) ?? ++counted <= limit)
+            {
+                continue;
+            }
+
             try
             {
                 // The active Network log must not disappear underneath FFXIV_ACT_Plugin.

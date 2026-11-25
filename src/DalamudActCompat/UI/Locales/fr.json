@@ -375,7 +375,7 @@
   "Enabled after verification": "Activé après vérification",
   "Enabling this template disables the other two.": "Activer ce modèle désactive les deux autres.",
   "Encounter history": "Historique des combats",
-  "Encounter history, encounter JSON, and Network logs each keep this many.": "L'histoire de la rencontre, rencontrer JSON, et les registres du réseau gardent chacun ce nombre.",
+  "Duties and open-world fights each keep this many records, with their encounter JSON; Network logs keep this many too.": "Les missions et les combats en monde ouvert conservent chacun ce nombre d'entrées, avec leur JSON de combat ; les journaux Network en conservent autant.",
   "Encrypted cloud sync": "Synchronisation cloud chiffrée",
   "Encrypting and uploading settings…": "Chiffrement et envoi des paramètres…",
   "Ended": "Terminé",
@@ -2234,5 +2234,10 @@
   "Using overlays in a browser, OBS or on another device": "Utiliser des overlays dans un navigateur, dans OBS ou sur un autre appareil",
   "Click WebSocket address below the overlay list on the Overlays page and copy the address shown.": "Cliquez sur « Adresse WebSocket » sous la liste des overlays de la page Overlays et copiez l’adresse affichée.",
   "Add ?OVERLAY_WS= and that address to the end of the overlay's URL (use & if the URL already has a ?), then open it in a browser or add it to OBS as a browser source.": "Ajoutez ?OVERLAY_WS= et cette adresse à la fin de l’URL de l’overlay (utilisez & si l’URL contient déjà un ?), puis ouvrez-la dans un navigateur ou ajoutez-la à OBS comme source navigateur.",
-  "To view it on a phone, tablet or another PC, turn on Allow other devices on the local network to connect in the same dialog, then use the Address on the local network shown there.": "Pour l’afficher sur un téléphone, une tablette ou un autre PC, activez « Autoriser les autres appareils du réseau local à se connecter » dans la même fenêtre, puis utilisez l’« Adresse sur le réseau local » qui y est indiquée."
+  "To view it on a phone, tablet or another PC, turn on Allow other devices on the local network to connect in the same dialog, then use the Address on the local network shown there.": "Pour l’afficher sur un téléphone, une tablette ou un autre PC, activez « Autoriser les autres appareils du réseau local à se connecter » dans la même fenêtre, puis utilisez l’« Adresse sur le réseau local » qui y est indiquée.",
+  "All": "Tous",
+  "Duties": "Mission",
+  "Field": "Zones",
+  "No fights of this kind yet.": "Aucun combat de ce type pour l'instant.",
+  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "Les combats récents peuvent afficher « Tous », « Mission » ou « Zones ». Les combats en monde ouvert enchaînés sur une même carte sont regroupés dans un dossier. Missions et combats en monde ouvert conservent chacun autant d'entrées que le permet la limite de l'historique : les combats en monde ouvert n'évincent donc jamais ceux des missions."
 }
