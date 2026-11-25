@@ -559,6 +559,8 @@ public sealed class MeterSettings
         destination.BackgroundOpacity = source.BackgroundOpacity;
         destination.DataBarOpacity = source.DataBarOpacity;
         destination.BackgroundColor = source.BackgroundColor;
+        destination.TextColor = source.TextColor;
+        destination.TextOutline = source.TextOutline;
         destination.ItemWidth = source.ItemWidth;
         destination.SortMode = source.SortMode;
         destination.DpsSortMetric = source.DpsSortMetric;

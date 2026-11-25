@@ -126,6 +126,7 @@ public sealed partial class ControlCenterWindow
         Setting("meter", "刷新间隔", "Refresh interval", "战斗统计 · 统计", "Combat Meter · Statistics", meter, "meter-stats");
         Setting("users", "玩家 ID 与代称", "Player names and aliases", "战斗统计 · 显示", "Combat Meter · Display", meter, "meter-display");
         Setting("edit", "自定义榜单样式", "Customize meter style", "战斗统计 · 榜单模板", "Combat Meter · Template", meter, "meter-template", openMeterStyleEditor);
+        Setting("edit", "统计窗口文字颜色与描边", "Meter text color and outline", "战斗统计 · 榜单模板", "Combat Meter · Template", meter, "meter-template", openMeterStyleEditor);
 
         var fflogsPage = Page.Fflogs;
         Setting("fflogs", "启用 FFLogs 在线估算", "Enable FFLogs online estimate", "FFLogs · Parse 预估", "FFLogs · Parse estimate", fflogsPage, "meter-fflogs",

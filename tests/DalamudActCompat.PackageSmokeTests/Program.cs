@@ -178,6 +178,12 @@ try
         HorizontalMeterLayoutSmokeTests.RunNative();
         return 0;
     }
+    if (args.Contains("--meter-text-native-only", StringComparer.Ordinal))
+    {
+        MeterTextSmokeTests.Run();
+        MeterTextSmokeTests.RunNative();
+        return 0;
+    }
     if (args.Contains("--ban-recovery-only", StringComparer.Ordinal))
     {
         await CloudBanRecoverySmokeTests.RunAsync(testRoot);
@@ -273,6 +279,7 @@ try
     if (args.Contains("--meter-display-scope-only", StringComparer.Ordinal)) return 0;
     CrowdedEncounterSmokeTests.Run();
     HorizontalMeterLayoutSmokeTests.Run();
+    MeterTextSmokeTests.Run();
     AiAssistantSmokeTests.Run(testRoot);
     CombatAutoHideSmokeTests.Run();
     EnglishLocalizationSmokeTests.Run();

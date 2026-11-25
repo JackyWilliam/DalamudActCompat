@@ -1636,7 +1636,7 @@
   "Check runtime status first": "先看執行狀態",
   "Check that the parser is running": "確認解析器在執行",
   "Check the slots to show; select a row (or that column in the preview) to edit it on the right. Drag to reorder.": "勾選要顯示的欄位；點中一行（或預覽裡的那一欄）後在右欄編輯。拖曳可改順序。",
-  "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour and the slots shown.": "「傳統」「橫版」「職能分欄」三選一；點「自訂版面…」可以調字級、透明度、背景色，以及要顯示的欄位。",
+  "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour, text colour and outline, and the slots shown.": "「傳統」「橫版」「職能分欄」三選一；點「自訂版面…」可以調字級、透明度、背景色、文字顏色和描邊，以及要顯示的欄位。",
   "Choose screenshots": "選擇截圖",
   "Clear search": "清除搜尋",
   "Cleared": "通關",
@@ -2239,5 +2239,11 @@
   "Duties": "副本",
   "Field": "野外",
   "No fights of this kind yet.": "這一類還沒有戰鬥紀錄。",
-  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "近期戰鬥可以按「全部 / 副本 / 野外」切換。同一張地圖裡連著打的野外戰鬥會收成一個資料夾；副本和野外各自保留「歷史記錄上限」設定的數量，野外打得再多也不會擠掉副本紀錄。"
+  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "近期戰鬥可以按「全部 / 副本 / 野外」切換。同一張地圖裡連著打的野外戰鬥會收成一個資料夾；副本和野外各自保留「歷史記錄上限」設定的數量，野外打得再多也不會擠掉副本紀錄。",
+  "Text color": "文字顏色",
+  "Changes names and plain text, and the grey of labels follows; accents such as ice blue and gold stay. Saved per meter template.": "改名字和一般文字的顏色，標籤的灰色隨之變化；冰藍、金色等強調色不變。各統計範本分別儲存。",
+  "Automatic text color": "恢復自動文字顏色",
+  "Text outline": "文字描邊",
+  "Draws an edge of the opposite brightness around the text, so it stays readable over bright scenery when the panel is transparent. Saved per meter template.": "替文字加一圈反色的邊。底板透明時，文字在雪地、天空這類明亮背景上也看得清楚。各統計範本分別儲存。",
+  "Meter text color and outline": "統計視窗文字顏色與描邊"
 }

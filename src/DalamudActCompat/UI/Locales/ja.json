@@ -1636,7 +1636,7 @@
   "Check runtime status first": "まず動作状況を確認",
   "Check that the parser is running": "パーサーの動作を確認",
   "Check the slots to show; select a row (or that column in the preview) to edit it on the right. Drag to reorder.": "表示するスロットにチェックを入れ、行（またはプレビューの列）を選ぶと右側で編集できます。ドラッグで並べ替えます。",
-  "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour and the slots shown.": "「クラシック」「水平」「ロール別」から選び、「レイアウトをカスタマイズ…」で文字サイズ、不透明度、背景色、表示するスロットを変更します。",
+  "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour, text colour and outline, and the slots shown.": "「クラシック」「水平」「ロール別」から選び、「レイアウトをカスタマイズ…」で文字サイズ、不透明度、背景色、文字色と縁取り、表示するスロットを変更します。",
   "Choose screenshots": "スクリーンショットを選択",
   "Clear search": "検索をクリア",
   "Cleared": "クリア",
@@ -2239,5 +2239,11 @@
   "Duties": "CF",
   "Field": "野外",
   "No fights of this kind yet.": "この種類の戦闘記録はまだありません。",
-  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "「最近の戦闘」は「すべて / CF / 野外」で切り替えられます。同じマップで続けて行った野外の戦闘は 1 つのフォルダーにまとめられます。コンテンツと野外はそれぞれ「履歴制限」の件数まで保存されるため、野外でいくら戦ってもコンテンツの記録が押し出されることはありません。"
+  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "「最近の戦闘」は「すべて / CF / 野外」で切り替えられます。同じマップで続けて行った野外の戦闘は 1 つのフォルダーにまとめられます。コンテンツと野外はそれぞれ「履歴制限」の件数まで保存されるため、野外でいくら戦ってもコンテンツの記録が押し出されることはありません。",
+  "Text color": "文字色",
+  "Changes names and plain text, and the grey of labels follows; accents such as ice blue and gold stay. Saved per meter template.": "名前と通常の文字の色を変更します。ラベルの灰色もそれに合わせて変わりますが、アイスブルーや金色などの強調色は変わりません。メーターのテンプレートごとに保存されます。",
+  "Automatic text color": "文字色を自動に戻す",
+  "Text outline": "文字の縁取り",
+  "Draws an edge of the opposite brightness around the text, so it stays readable over bright scenery when the panel is transparent. Saved per meter template.": "文字のまわりに反対の明るさの縁を付けます。背景を透明にしていても、雪原や空のような明るい景色の上で読みやすくなります。メーターのテンプレートごとに保存されます。",
+  "Meter text color and outline": "統計ウィンドウの文字色と縁取り"
 }

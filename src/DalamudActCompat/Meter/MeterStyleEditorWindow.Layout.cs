@@ -548,6 +548,31 @@ public sealed partial class MeterStyleEditorWindow
                 changed = true;
             }
         }
+        // The swatch shows the automatic colour until one is picked, so opening the picker
+        // starts from what the meter is drawing now.
+        var automaticText = MeterBackground.Text(profile);
+        var textColor = profile.TextColor ?? new Vector3(automaticText.X, automaticText.Y, automaticText.Z);
+        if (Field(text.Get("文字颜色", "Text color"),
+                text.Get("改名字和普通文字的颜色，标签的灰色随之变化；冰蓝、金色等强调色不变。各统计模板分别保存。",
+                    "Changes names and plain text, and the grey of labels follows; accents such as ice blue and gold stay. Saved per meter template."),
+                () => ColorField("text", ref textColor)))
+        {
+            profile.TextColor = textColor;
+            changed = true;
+        }
+        if (DactUi.Button(text.Get("恢复自动文字颜色", "Automatic text color") + "##reset-text-color") && profile.TextColor is not null)
+        {
+            profile.TextColor = null;
+            changed = true;
+        }
+        var outline = profile.TextOutline;
+        if (DactUi.ToggleRow(text.Get("文字描边", "Text outline"), ref outline,
+                text.Get("给文字加一圈反色的边。底板透明时，文字在雪地、天空这类亮背景上也看得清。各统计模板分别保存。",
+                    "Draws an edge of the opposite brightness around the text, so it stays readable over bright scenery when the panel is transparent. Saved per meter template.")))
+        {
+            profile.TextOutline = outline;
+            changed = true;
+        }
         return changed;
     }
 

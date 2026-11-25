@@ -84,6 +84,14 @@ public sealed class MeterWindowProfile
 
     public Vector3? BackgroundColor { get; set; }
 
+    // Null keeps the automatic colour (white, or dark on a bright opaque panel), which is
+    // what every layout saved before this option shows.
+    public Vector3? TextColor { get; set; }
+
+    // Off unless the player turns it on: an edge around every label changes how a layout
+    // looks, so existing meters must not gain one on update.
+    public bool TextOutline { get; set; }
+
     public float ItemWidth { get; set; } = 210;
 
     // Horizontal meter only. Off keeps every player at ItemWidth and scrolls whoever does not
@@ -112,6 +120,11 @@ public sealed class MeterWindowProfile
         if (BackgroundColor is { } color && MeterBackground.Normalize(color) != color)
         {
             BackgroundColor = MeterBackground.Normalize(color);
+            changed = true;
+        }
+        if (TextColor is { } textColor && MeterBackground.NormalizeText(textColor) != textColor)
+        {
+            TextColor = MeterBackground.NormalizeText(textColor);
             changed = true;
         }
         var normalizedFontScale = ClampFinite(FontScale, 0.65f, 2, 1);

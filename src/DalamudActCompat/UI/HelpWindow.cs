@@ -516,8 +516,8 @@ public sealed class HelpWindow : Window
             Image("control-meter", text.Get("战斗统计页", "The Combat Meter page"));
         });
         DrawCard("help-meter-templates", text.Get("榜单模板与显示的数据", "Templates and columns"), () => Bullets(
-            text.Get("「经典榜」「横版」「职能分栏」三选一；点「自定义布局…」可以调字号、透明度、背景色，以及要显示的槽位。",
-                "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour and the slots shown."),
+            text.Get("「经典榜」「横版」「职能分栏」三选一；点「自定义布局…」可以调字号、透明度、背景色、文字颜色和描边，以及要显示的槽位。",
+                "Choose Classic, Horizontal or Role split, then click Customize layout… to change font size, opacity, background colour, text colour and outline, and the slots shown."),
             text.Get("经典榜标题栏可以在 DPS 榜 / HPS 榜、8 人本 / 24 人本之间切换。",
                 "The Classic header switches between DPS and HPS ranking and between 8-player and 24-player modes."),
             text.Get("「显示范围」决定显示哪些玩家：按榜单设置，或跟随主页的「游戏解析范围」。",
