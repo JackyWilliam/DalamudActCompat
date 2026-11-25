@@ -160,6 +160,12 @@ try
         ValidateHtmlOverlayDefaults();
         return 0;
     }
+    if (args.Contains("--overlay-websocket-only", StringComparer.Ordinal))
+    {
+        OverlayConfigEndpointSmokeTests.Run(testRoot);
+        OverlayConfigEndpointSmokeTests.RunEndpointSwitch();
+        return 0;
+    }
     if (args.Contains("--diagnostic-report-only", StringComparer.Ordinal))
     {
         ValidateDiagnosticReport(testRoot);
@@ -409,6 +415,7 @@ try
     await ValidateOverlayWebSocketFatalAcceptRecoveryAsync();
     ValidateHtmlOverlayDefaults();
     OverlayConfigEndpointSmokeTests.Run(testRoot);
+    OverlayConfigEndpointSmokeTests.RunEndpointSwitch();
     OverlayHotkeySmokeTests.Run();
     await DisplayOptionsSmokeTests.RunAsync();
     if (string.Equals(

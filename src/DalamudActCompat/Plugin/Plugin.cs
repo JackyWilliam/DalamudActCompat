@@ -806,6 +806,13 @@ public sealed class Plugin : IDalamudPlugin
         settingsWindow.PreviewFriendNotificationSound = sound => friendsNotificationSound.Play(sound, configuration.FriendNotificationSoundVolume, replace: true);
         friendDutyProvider = new FriendDutySnapshotProvider(dataManager, log);
         settingsWindow.Friends = friendsUi;
+        settingsWindow.GetOverlayWebSocket = () => actRuntime.OverlayWebSocketEndpoint;
+        settingsWindow.ApplyOverlayWebSocket = async (address, port) =>
+        {
+            // Covers the socket switch plus the parser restart that follows it.
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+            return await parserAdapter.SetOverlayWebSocketEndpointAsync(address, port, timeout.Token).ConfigureAwait(false);
+        };
         settingsWindow.Paths = paths;
         settingsWindow.EncounterHistory = stateStore;
         settingsWindow.JobIcons = jobIcons;

@@ -111,6 +111,9 @@ public sealed class SelfHostedActRuntime : IDisposable
     private IReadOnlyList<ActOverlayTemplate> overlayTemplates = [];
     private IReadOnlyList<OverlayTemplateSource> overlayTemplateSources = [];
     private string? overlayWebSocketUri;
+    // Read by the control center on the draw thread while the lifecycle runs on a worker.
+    private volatile RainbowMage.OverlayPlugin.WebSocket.ServerController? overlayWebSocketServer;
+    private volatile RainbowMage.OverlayPlugin.IPluginConfig? overlayPluginConfig;
     private FileStream? webViewSessionLock;
     private HttpClient? httpClient;
     private Func<string, bool>? externalTtsDispatcher;
@@ -252,6 +255,30 @@ public sealed class SelfHostedActRuntime : IDisposable
     public bool IsParserRunning => parser is not null;
 
     public bool IsOverlayRunning => overlay is not null;
+
+    // Null while OverlayPlugin is not running: its config is only loaded with it.
+    public OverlayWebSocketEndpoint? OverlayWebSocketEndpoint
+    {
+        get
+        {
+            var config = overlayPluginConfig;
+            var server = overlayWebSocketServer;
+            return config is null || server is null
+                ? null
+                : new OverlayWebSocketEndpoint(config.WSServerIP ?? string.Empty, config.WSServerPort, server.Running);
+        }
+    }
+
+    // Open overlay pages keep the old socket address in their URL. The caller restarts the
+    // overlay through the parser lifecycle afterwards, which also serialises this call.
+    public OverlayWebSocketChange SetOverlayWebSocketEndpoint(string address, int port)
+    {
+        var config = overlayPluginConfig;
+        var server = overlayWebSocketServer;
+        return config is null || server is null
+            ? new OverlayWebSocketChange(OverlayWebSocketChangeStatus.NotRunning)
+            : OverlayWebSocketEndpointSwitch.Apply(server, config, address, port);
+    }
 
     public void ConfigureExternalPluginBridges(
         Func<string, bool> ttsDispatcher,
@@ -869,6 +896,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             var webSocketUri = server.GetModernUrl("http://localhost/")
                 .Split("OVERLAY_WS=", 2)[1];
             overlayWebSocketUri = webSocketUri;
+            overlayPluginConfig = container.Resolve<RainbowMage.OverlayPlugin.IPluginConfig>();
+            overlayWebSocketServer = server;
             overlayTemplateSources = LoadOverlayTemplateConfig().Overlays;
             var cactbotDirectory = Path.Combine(
                 pluginInterface.ConfigDirectory.FullName,
@@ -966,6 +995,8 @@ public sealed class SelfHostedActRuntime : IDisposable
                 }
 
                 overlayWebSocketUri = null;
+                overlayWebSocketServer = null;
+                overlayPluginConfig = null;
                 overlayTemplates = [];
                 overlayTemplateSources = [];
                 try
@@ -1532,6 +1563,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             overlayTemplates = [];
             overlayTemplateSources = [];
             overlayWebSocketUri = null;
+            overlayWebSocketServer = null;
+            overlayPluginConfig = null;
             overlay?.DeInitPlugin();
         }
         finally

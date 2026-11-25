@@ -218,6 +218,33 @@ public sealed class IinactAdapter : IParserEngine
         }
     }
 
+    // Under the lifecycle lock so a concurrent start or stop cannot swap the server away
+    // halfway through the change.
+    public async Task<OverlayWebSocketChange> SetOverlayWebSocketEndpointAsync(
+        string address,
+        int port,
+        CancellationToken cancellationToken)
+    {
+        await lifecycleLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var change = actRuntime.SetOverlayWebSocketEndpoint(address, port);
+            if (change.Status == OverlayWebSocketChangeStatus.Applied)
+            {
+                // Every open overlay page has the old socket address in its URL; the ordinary
+                // restart rebuilds them against the endpoint that was just proven to work.
+                StartCore(cancellationToken);
+            }
+
+            return change;
+        }
+        finally
+        {
+            lifecycleLock.Release();
+        }
+    }
+
     public void ResetCurrentEncounter()
     {
         lock (encounterModeTransitionLock)
