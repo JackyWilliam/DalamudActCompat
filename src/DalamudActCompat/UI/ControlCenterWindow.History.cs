@@ -18,7 +18,12 @@ public sealed partial class ControlCenterWindow
 {
     private int historyTab;
     private Guid? historySelectedId;
+    // Holds the id of each open duty folder and, for an open folder of open-world fights, the
+    // ids of its fights (see IsHistoryFolderOpen).
     private readonly HashSet<Guid> historyExpandedFolders = [];
+    private IReadOnlyList<Encounter>? historyRowsSource;
+    private HistoryFilter historyRowsFilter;
+    private IReadOnlyList<HistoryRow> historyRows = [];
     private string? historySelectedFile;
     private Encounter? historyFileEncounter;
     private string historyRawJson = string.Empty;
@@ -107,45 +112,141 @@ public sealed partial class ControlCenterWindow
             return;
         }
 
-        var selected = historySelectedId is { } id ? EncounterWindow.FindRecentEncounter(recent, id) : null;
-        if (selected is null)
+        var filter = Enum.IsDefined(configuration.HistoryFilter) ? configuration.HistoryFilter : HistoryFilter.All;
+        var rows = HistoryRows(recent, filter);
+        var selected = historySelectedId is { } id ? FindHistoryFight(rows, id) : null;
+        if (selected is null && rows.Count > 0)
         {
-            // The newest fight opens first; a duty folder opens on its latest pull.
-            selected = recent[0].SegmentRecords.Count > 0 ? recent[0].SegmentRecords[^1] : recent[0];
-            if (recent[0].SegmentRecords.Count > 0) historyExpandedFolders.Add(recent[0].Id);
+            // The newest fight opens first. A duty folder opens on its latest pull; a folder of
+            // open-world fights stays shut, since keeping those out of the way is why it exists.
+            var first = rows[0].Entry;
+            selected = first.SegmentRecords.Count > 0 ? first.SegmentRecords[^1] : first;
+            if (first.SegmentRecords.Count > 0 && !rows[0].OpenWorld) historyExpandedFolders.Add(first.Id);
             historySelectedId = selected.Id;
         }
 
-        if (DactUi.BeginPanel("history-recent-list", new Vector2(wide ? 236 * s : -1, wide ? height : 230 * s), 8, 2))
+        var listWidth = wide ? 236 * s : ImGui.GetContentRegionAvail().X;
+        ImGui.BeginGroup();
+        var filterIndex = (int)filter;
+        // The three segments share the list's width, so each label has to stay short in every
+        // language ("Field", not "Open world"); the kit shortens whatever does not fit.
+        if (DactUi.Segmented("history-filter",
+                [text.Get("全部", "All"), text.Get("副本", "Duties"), text.Get("野外", "Field")],
+                ref filterIndex, listWidth))
         {
-            foreach (var encounter in recent)
+            configuration.HistoryFilter = (HistoryFilter)filterIndex;
+            saveConfiguration();
+        }
+        // Side by side, the filter comes out of the list so both columns end on the same line.
+        var listHeight = wide ? height - ImGui.GetItemRectSize().Y - ImGui.GetStyle().ItemSpacing.Y : 230 * s;
+        if (DactUi.BeginPanel("history-recent-list", new Vector2(wide ? listWidth : -1, listHeight), 8, 2))
+        {
+            if (rows.Count == 0)
+                DactUi.Wrapped(text.Get("这一类还没有战斗记录。", "No fights of this kind yet."), DactTheme.Palette.Muted);
+            foreach (var row in rows)
             {
-                var isFolder = encounter.SegmentRecords.Count > 0;
-                var expanded = isFolder && historyExpandedFolders.Contains(encounter.Id);
+                var entry = row.Entry;
+                var isFolder = entry.SegmentRecords.Count > 0;
+                var expanded = isFolder && IsHistoryFolderOpen(row);
                 // An open folder shows the selection on the pull itself, not on both rows.
-                var active = encounter.Id == historySelectedId ||
-                             isFolder && !expanded && encounter.SegmentRecords.Any(pull => pull.Id == historySelectedId);
-                if (DrawFightItem(encounter, active, isFolder ? expanded : null, 0))
+                var active = entry.Id == historySelectedId ||
+                             isFolder && !expanded && entry.SegmentRecords.Any(pull => pull.Id == historySelectedId);
+                // Under 野外 every row is open world, so the pill would only take room from the title.
+                var openWorldPill = row.IsOpenWorldRun && filter != HistoryFilter.OpenWorld;
+                if (DrawFightItem(entry, active, isFolder ? expanded : null, 0, openWorldPill))
                 {
-                    if (isFolder && !historyExpandedFolders.Remove(encounter.Id)) historyExpandedFolders.Add(encounter.Id);
-                    historySelectedId = (isFolder ? encounter.SegmentRecords[^1] : encounter).Id;
+                    if (isFolder) SetHistoryFolderOpen(row, !expanded);
+                    historySelectedId = (isFolder ? entry.SegmentRecords[^1] : entry).Id;
                 }
                 if (!expanded) continue;
-                for (var index = 0; index < encounter.SegmentRecords.Count; index++)
+                for (var index = 0; index < entry.SegmentRecords.Count; index++)
                 {
-                    var pull = encounter.SegmentRecords[index];
+                    var pull = entry.SegmentRecords[index];
                     if (DrawFightItem(pull, pull.Id == historySelectedId, null, index + 1)) historySelectedId = pull.Id;
                 }
             }
         }
         DactUi.EndPanel();
+        ImGui.EndGroup();
+        // A filter with nothing under it leaves the details empty rather than showing a fight
+        // the list does not contain.
+        if (selected is null) return;
         if (wide) ImGui.SameLine(0, 14 * s);
         DrawEncounterDetails(selected, height, "history-recent-details");
     }
 
+    private IReadOnlyList<HistoryRow> HistoryRows(IReadOnlyList<Encounter> recent, HistoryFilter filter)
+    {
+        // The store hands out the same list until history changes, so the rows (and the folders
+        // built for runs of open-world fights) are rebuilt only then, not on every frame.
+        if (!ReferenceEquals(recent, historyRowsSource) || filter != historyRowsFilter)
+        {
+            historyRowsSource = recent;
+            historyRowsFilter = filter;
+            historyRows = EncounterHistoryRules.BuildRows(recent, filter);
+        }
+        return historyRows;
+    }
+
+    private static Encounter? FindHistoryFight(IReadOnlyList<HistoryRow> rows, Guid id)
+    {
+        foreach (var row in rows)
+        {
+            if (row.Entry.Id == id) return row.Entry;
+            foreach (var fight in row.Entry.SegmentRecords)
+                if (fight.Id == id) return fight;
+        }
+        return null;
+    }
+
+    // A duty folder is remembered by its own id. A folder of open-world fights exists only on
+    // screen and its id follows its oldest fight, which the history limit drops while the player
+    // keeps fighting; remembering the fights instead keeps it open as fights join and leave.
+    private bool IsHistoryFolderOpen(HistoryRow row)
+    {
+        if (!row.IsOpenWorldRun) return historyExpandedFolders.Contains(row.Entry.Id);
+        foreach (var fight in row.Entry.SegmentRecords)
+            if (historyExpandedFolders.Contains(fight.Id)) return true;
+        return false;
+    }
+
+    private void SetHistoryFolderOpen(HistoryRow row, bool open)
+    {
+        if (!row.IsOpenWorldRun)
+        {
+            if (open) historyExpandedFolders.Add(row.Entry.Id);
+            else historyExpandedFolders.Remove(row.Entry.Id);
+            return;
+        }
+        foreach (var fight in row.Entry.SegmentRecords)
+        {
+            if (open) historyExpandedFolders.Add(fight.Id);
+            else historyExpandedFolders.Remove(fight.Id);
+        }
+    }
+
+    // Jumping to a fight from elsewhere (the progression chart, an AI review) must not land on
+    // a list whose filter hides it.
+    private void RevealHistoryFight(Guid id)
+    {
+        historySelectedId = id;
+        var recent = EncounterHistory?.GetSnapshot().Recent ?? [];
+        foreach (var entry in recent)
+        {
+            if (entry.Id != id && !entry.SegmentRecords.Any(pull => pull.Id == id)) continue;
+            var hidden = EncounterHistoryRules.IsOpenWorld(entry) ? HistoryFilter.Duty : HistoryFilter.OpenWorld;
+            if (configuration.HistoryFilter != hidden) return;
+            configuration.HistoryFilter = HistoryFilter.All;
+            saveConfiguration();
+            return;
+        }
+    }
+
     // One row of the fight list (dsl fight): title with a result pill, then time, length and
-    // deaths. folderOpen marks a duty folder; segment > 0 is a pull inside an open folder.
-    private bool DrawFightItem(Encounter encounter, bool selected, bool? folderOpen, int segment)
+    // deaths. folderOpen marks a folder; segment > 0 is a record inside an open folder.
+    // openWorldPill labels a folder of open-world fights, which is named after its map just as
+    // a duty folder is named after its duty.
+    private bool DrawFightItem(Encounter encounter, bool selected, bool? folderOpen, int segment, bool openWorldPill = false)
     {
         var s = DactUi.S;
         ImGui.PushID(encounter.Id.ToString("N"));
@@ -170,8 +271,12 @@ public sealed partial class ControlCenterWindow
         }
 
         var pull = segment == 0 && folderOpen is null || segment > 0 ? MatchPull(encounter) : null;
-        var (pillLabel, pillTone) = pull is null ? (null, PillTone.Ok)
-            : pull.Cleared ? (text.Get("通关", "Cleared"), PillTone.Ok) : (text.Get("团灭", "Wipe"), PillTone.Error);
+        string? pillLabel = null;
+        var pillTone = PillTone.Ok;
+        if (pull is not null)
+            (pillLabel, pillTone) = pull.Cleared ? (text.Get("通关", "Cleared"), PillTone.Ok) : (text.Get("团灭", "Wipe"), PillTone.Error);
+        else if (openWorldPill)
+            (pillLabel, pillTone) = (text.Get("野外", "Field"), PillTone.Off);
         var pillWidth = pillLabel is null ? 0 : DactUi.PillWidth(pillLabel, false);
         var right = start.X + width - 10 * s;
         if (pillLabel is not null) DactUi.DrawPill(draw, new Vector2(right - pillWidth, start.Y + 8 * s), pillLabel, pillTone, false);
@@ -738,7 +843,7 @@ public sealed partial class ControlCenterWindow
             {
                 if (candidate.TerritoryId != pull.TerritoryId || Math.Abs((candidate.StartTime - pull.StartTime).TotalSeconds) > 45) continue;
                 if (encounter.SegmentRecords.Count > 0) historyExpandedFolders.Add(encounter.Id);
-                historySelectedId = candidate.Id;
+                RevealHistoryFight(candidate.Id);
                 historyTab = 0;
                 return;
             }

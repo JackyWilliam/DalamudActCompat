@@ -442,8 +442,8 @@ public sealed class SettingsWindow : Window
         }
 
         ImGui.TextDisabled(text.Get(
-            "战斗历史、战斗 JSON 与 Network 日志分别保留此数量。",
-            "Encounter history, encounter JSON, and Network logs each keep this many."));
+            "副本和野外的战斗记录各保留此数量，互不挤占，战斗 JSON 跟随记录；Network 日志另外保留此数量。",
+            "Duties and open-world fights each keep this many records, with their encounter JSON; Network logs keep this many too."));
         if (historyLimitDraft is not { } pending || pending == configuration.HistoryLimit)
         {
             historyLimitDraft = null;

@@ -375,7 +375,7 @@
   "Enabled after verification": "帳號驗證後啟用",
   "Enabling this template disables the other two.": "啟用後會自動停用另外兩個模板。",
   "Encounter history": "戰鬥紀錄",
-  "Encounter history, encounter JSON, and Network logs each keep this many.": "戰鬥歷史、戰鬥 JSON 與 Network 日誌分別保留此數量。",
+  "Duties and open-world fights each keep this many records, with their encounter JSON; Network logs keep this many too.": "副本和野外的戰鬥紀錄各保留此數量，互不排擠，戰鬥 JSON 跟隨紀錄；Network 日誌另外保留此數量。",
   "Encrypted cloud sync": "加密雲端同步",
   "Encrypting and uploading settings…": "正在加密並上傳配置…",
   "Ended": "已結束",
@@ -2234,5 +2234,10 @@
   "Using overlays in a browser, OBS or on another device": "在瀏覽器、OBS 或其他裝置裡使用",
   "Click WebSocket address below the overlay list on the Overlays page and copy the address shown.": "點「懸浮視窗」頁懸浮視窗清單下方的「WebSocket 位址」，複製裡面的位址。",
   "Add ?OVERLAY_WS= and that address to the end of the overlay's URL (use & if the URL already has a ?), then open it in a browser or add it to OBS as a browser source.": "在懸浮視窗網址後面加上 ?OVERLAY_WS= 和這個位址（網址裡已經有 ? 時改用 &），再用瀏覽器開啟，或在 OBS 裡新增為瀏覽器來源。",
-  "To view it on a phone, tablet or another PC, turn on Allow other devices on the local network to connect in the same dialog, then use the Address on the local network shown there.": "要在手機、平板或另一台電腦上看，先在同一個彈窗裡開啟「允許區域網路內的其他裝置連線」，再使用那裡顯示的「區域網路位址」。"
+  "To view it on a phone, tablet or another PC, turn on Allow other devices on the local network to connect in the same dialog, then use the Address on the local network shown there.": "要在手機、平板或另一台電腦上看，先在同一個彈窗裡開啟「允許區域網路內的其他裝置連線」，再使用那裡顯示的「區域網路位址」。",
+  "All": "全部",
+  "Duties": "副本",
+  "Field": "野外",
+  "No fights of this kind yet.": "這一類還沒有戰鬥紀錄。",
+  "Recent encounters can show All, Duties or Field. Open-world fights fought back to back in one map fold into one folder. Duties and open-world fights each keep as many records as History limit allows, so open-world fights never push duty records out.": "近期戰鬥可以按「全部 / 副本 / 野外」切換。同一張地圖裡連著打的野外戰鬥會收成一個資料夾；副本和野外各自保留「歷史記錄上限」設定的數量，野外打得再多也不會擠掉副本紀錄。"
 }

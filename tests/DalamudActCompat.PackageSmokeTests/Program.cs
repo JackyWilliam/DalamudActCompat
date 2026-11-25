@@ -468,6 +468,7 @@ try
     ValidatePluginUnloadOwnership();
     await ValidateEncounterShutdownFlushAsync(testRoot);
     await ValidateEncounterRetentionAsync(testRoot);
+    await EncounterHistorySmokeTests.RunAsync(testRoot);
     await ValidateAtomicEncounterStateUpdatesAsync();
     await ValidateFactoryResetRollbackAsync(testRoot);
     await ValidatePortableConfigurationArchiveAsync(testRoot);
