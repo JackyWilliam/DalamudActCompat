@@ -233,7 +233,11 @@ internal static class HelpScreenshotGenerator
                     ? Stub(parameter.ParameterType, returns.TryGetValue(parameter.Name!, out var result) ? result : null, returns.ContainsKey(parameter.Name!))
                     : parameter.ParameterType.IsValueType ? Activator.CreateInstance(parameter.ParameterType) : null)
             .ToArray();
-        return (ControlCenterWindow)constructor.Invoke(arguments);
+        var window = (ControlCenterWindow)constructor.Invoke(arguments);
+        // The default endpoint, so the 悬浮窗 captures show the WebSocket entry players will see.
+        window.GetOverlayWebSocket = () => new OverlayWebSocketEndpoint(
+            OverlayWebSocketEndpoint.LoopbackAddress, OverlayWebSocketEndpoint.DefaultPort, Running: true);
+        return window;
     }
 
     internal sealed class AccountState

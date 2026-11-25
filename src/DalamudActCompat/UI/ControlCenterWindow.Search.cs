@@ -144,6 +144,8 @@ public sealed partial class ControlCenterWindow
         var overlays = Page.Overlays;
         Setting("layers", "Cactbot 设置 / 安装与更新", "Cactbot settings / install", "悬浮窗 · Cactbot", "Overlays · Cactbot", overlays, "cactbot-management");
         Setting("plus", "添加悬浮窗", "Add overlay", "悬浮窗", "Overlays", overlays, null);
+        if (GetOverlayWebSocket is not null)
+            Setting("layers", "WebSocket 地址与端口", "WebSocket address and port", "悬浮窗", "Overlays", overlays, null, RequestOverlayWebSocketDialog);
 
         var extensions = Page.Extensions;
         Setting("plug", "系统插件（FFXIV_ACT_Plugin、OverlayPlugin）", "System plugins", "扩展", "Extensions", extensions, "ext-system");

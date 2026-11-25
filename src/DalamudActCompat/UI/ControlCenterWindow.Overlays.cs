@@ -71,6 +71,7 @@ public sealed partial class ControlCenterWindow
         }
         DactUi.EndPanel();
         changed |= DrawAddOverlayDialog(templates);
+        DrawOverlayWebSocketDialog();
         return changed;
     }
 
@@ -177,8 +178,12 @@ public sealed partial class ControlCenterWindow
         var s = DactUi.S;
         DactUi.Text(text.Get("我的悬浮窗", "My overlays"), DactTheme.Palette.Muted, DactFonts.Small);
         // The rows scroll on their own; the all-overlays switch stays pinned below them.
-        // gap + divider + gap + label + gap + switch row (4 + 1 + 4 + 16 + 4 + 24).
-        var footerHeight = 53 * s;
+        // gap + divider + gap + label + gap + switch row (4 + 1 + 4 + 16 + 4 + 24), and
+        // gap + button (4 + 30) for the WebSocket entry. It lives here rather than in the page
+        // header: a second header button made the header wrap on narrow windows, which
+        // pushed the details panel into scrolling.
+        var showSocket = GetOverlayWebSocket is not null;
+        var footerHeight = (53 + (showSocket ? 34 : 0)) * s;
         var listHeight = Math.Max(60 * s, ImGui.GetContentRegionAvail().Y - footerHeight);
         ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(0, 4) * s);
         if (ImGui.BeginChild("overlay-rows", new Vector2(-1, listHeight), false))
@@ -219,6 +224,8 @@ public sealed partial class ControlCenterWindow
         if (ImGui.IsItemHovered()) DactUi.Tooltip(text.Get(
             "仅临时隐藏网页悬浮窗，不改变各悬浮窗保存的开启状态。",
             "Temporarily hides web overlays without changing their saved open state."));
+        if (showSocket && DactUi.Button(text.Get("WebSocket 地址", "WebSocket address") + "##overlay-websocket", width: ImGui.GetContentRegionAvail().X))
+            RequestOverlayWebSocketDialog();
     }
 
     private bool DrawManagedOverlayDetails(string name, HtmlOverlayWindowSettings settings, IReadOnlyList<ActOverlayTemplate> templates)

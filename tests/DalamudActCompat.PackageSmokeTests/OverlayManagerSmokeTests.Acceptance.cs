@@ -39,6 +39,9 @@ internal static partial class OverlayManagerSmokeTests
             var editor = new OverlayHotkeyEditor(service, _ => false); f.Window.HotkeyEditor = editor;
             var custom = f.Config.GetOverlayWindowSettings("custom");
             custom.Hotkeys = [new() { Key = 220, Modifiers = OverlayHotkeyModifiers.Alt }];
+            // With an endpoint source every scenario also lays out the WebSocket button under the list.
+            OverlayWebSocketEndpoint? socket = new("127.0.0.1", 10501, true);
+            f.Window.GetOverlayWebSocket = () => socket;
             Set(f.Window, "isStatusVisible", (Func<bool>)(() => true));
             Set(f.Window, "getGameRegionSelection", (Func<GameRegionSelection>)(() => GameRegionResolver.Resolve(GameRegionMode.Auto, "Chinese", 4)));
             Set(f.Window, "setGameRegionMode", (Action<GameRegionMode>)(_ => { }));
@@ -76,7 +79,7 @@ internal static partial class OverlayManagerSmokeTests
                     DactTheme.DrawGameWindow();
                     // Stacked details can start below the viewport. Scroll the
                     // parent to them so native clipping cannot silently skip the page.
-                    ImGui.SetScrollY(view != "home" && view != "list" && !view.StartsWith("add") && size.X < 760 * io.FontGlobalScale
+                    ImGui.SetScrollY(view != "home" && view != "list" && !view.StartsWith("add") && !view.StartsWith("websocket") && size.X < 760 * io.FontGlobalScale
                         ? ImGui.GetScrollMaxY() : 0);
                     if (openPopup) { ImGui.OpenPopup("###dact-add-overlay"); openPopup = false; }
                     if (view == "home") home.Invoke(f.Window, null); else draw.Invoke(f.Window, null);
@@ -95,7 +98,8 @@ internal static partial class OverlayManagerSmokeTests
                 foreach (var scale in new[] { 1f, 1.4f, 2f })
                 {
                     f.Config.UiLanguage = language.Id; io.FontGlobalScale = scale; size = new(width, 880);
-                    foreach (var scenario in new[] { "home", "list", "general", "cactbot", "hotkeys", "source", "edit-url", "rename", "missing", "add", "add-cactbot", "add-template", "add-url" })
+                    foreach (var scenario in new[] { "home", "list", "general", "cactbot", "hotkeys", "source", "edit-url", "rename", "missing", "add", "add-cactbot", "add-template", "add-url",
+                                 "websocket", "websocket-lan", "websocket-custom", "websocket-off" })
                     {
                         view = scenario; var errors = new List<string>();
                         // Independent states prevent a previous language's scroll
@@ -114,14 +118,26 @@ internal static partial class OverlayManagerSmokeTests
                             "add-template" => Enum.ToObject(Nullable.GetUnderlyingType(creator.FieldType)!, 1),
                             "add-url" => Enum.ToObject(Nullable.GetUnderlyingType(creator.FieldType)!, 2), _ => null });
                         openPopup = scenario.StartsWith("add");
+                        // Loopback, every interface, a hand-edited address, and OverlayPlugin not running.
+                        socket = scenario switch
+                        {
+                            "websocket-lan" => new("*", 10501, true),
+                            "websocket-custom" => new("192.168.1.20", 12345, true),
+                            "websocket-off" => null,
+                            _ => new("127.0.0.1", 10501, true),
+                        };
+                        if (scenario.StartsWith("websocket")) f.Window.RequestOverlayWebSocketDialog();
                         for (var frame = 0; frame < 5; frame++) Frame();
-                        var detailsDrawn = scenario is "home" or "list" || scenario.StartsWith("add");
+                        if (scenario.StartsWith("websocket"))
+                            Check(context.OpenPopupStack.Size == 1, "The WebSocket dialog was not opened.");
+                        var detailsDrawn = scenario is "home" or "list" || scenario.StartsWith("add") || scenario.StartsWith("websocket");
                         for (var i = 0; i < context.Windows.Size; i++)
                         {
                             var window = context.Windows[i]; if (!window.Active) continue;
                             var name = Marshal.PtrToStringUTF8((nint)window.Name) ?? "";
                             if (name.Contains("/overlay-details_") && !window.SkipItems && window.ContentSize.Y > 100) detailsDrawn = true;
-                            if (!name.StartsWith("UI acceptance") && !name.Contains("dact-add-overlay")) continue;
+                            var dialog = name.Contains("dact-add-overlay") || name.Contains("dact-overlay-websocket");
+                            if (!name.StartsWith("UI acceptance") && !dialog) continue;
                             var available = window.Size.X - window.WindowPadding.X * 2 - window.ScrollbarSizes.X;
                             // A child scrolled out of view is not laid out this frame (SkipItems), so its
                             // ContentSize is stale; the scenario that scrolls it into view measures it.
@@ -130,7 +146,7 @@ internal static partial class OverlayManagerSmokeTests
                             if ((window.Flags & ImGuiWindowFlags.NoScrollbar) != 0 && name.Contains("overview-") &&
                                 window.ContentSize.Y > window.Size.Y - window.WindowPadding.Y * 2 + 2)
                                 errors.Add($"Unscrollable vertical overflow {name}: {window.ContentSize.Y:0.0} > {window.Size.Y - window.WindowPadding.Y * 2:0.0}");
-                            if (name.Contains("dact-add-overlay") && (window.Pos.X < 0 || window.Pos.Y < 0 ||
+                            if (dialog && (window.Pos.X < 0 || window.Pos.Y < 0 ||
                                 window.Pos.X + window.Size.X > io.DisplaySize.X + 1 || window.Pos.Y + window.Size.Y > io.DisplaySize.Y + 1))
                                 errors.Add("Modal escaped viewport");
                         }

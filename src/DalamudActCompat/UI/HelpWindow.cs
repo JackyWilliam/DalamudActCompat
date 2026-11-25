@@ -590,6 +590,14 @@ public sealed class HelpWindow : Window
                 "Pick a template or paste a full http, https or file address. Add only pages you trust."),
             text.Get("在右侧「常规」里设置「启动时自动打开」「脱战隐藏」等选项。",
                 "Under General on the right, set options such as Open on startup and Hide out of combat.")));
+        // The address alone does not say how a page takes it; ACT's OverlayPlugin has a URL generator for this.
+        DrawCard("help-overlay-websocket", text.Get("在浏览器、OBS 或其他设备里使用", "Using overlays in a browser, OBS or on another device"), () => Steps(
+            text.Get("点「悬浮窗」页悬浮窗列表下方的「WebSocket 地址」，复制里面的地址。",
+                "Click WebSocket address below the overlay list on the Overlays page and copy the address shown."),
+            text.Get("在悬浮窗网址后面加上 ?OVERLAY_WS= 和这个地址（网址里已经有 ? 时改用 &），再用浏览器打开，或在 OBS 里添加为浏览器源。",
+                "Add ?OVERLAY_WS= and that address to the end of the overlay's URL (use & if the URL already has a ?), then open it in a browser or add it to OBS as a browser source."),
+            text.Get("要在手机、平板或另一台电脑上看，先在同一个弹窗里打开「允许局域网内的其他设备连接」，再使用那里显示的「局域网地址」。",
+                "To view it on a phone, tablet or another PC, turn on Allow other devices on the local network to connect in the same dialog, then use the Address on the local network shown there.")));
         DrawCard("help-overlay-edit", text.Get("移动、缩放与鼠标穿透", "Moving, resizing and click-through"), () => Bullets(
             text.Get("点「编辑位置和大小」后拖动窗口或右下角，完成后点「完成位置编辑」。编辑时会暂时关闭穿透与锁定，完成后恢复。",
                 "Click Edit position and size, then drag the window or its lower-right corner. Click Finish position editing when done. Click-through and lock pause while you edit and come back afterwards."),
