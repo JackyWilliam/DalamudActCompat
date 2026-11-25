@@ -164,11 +164,12 @@ public sealed partial class ControlCenterWindow
         // Accent glow: a soft disc that swells once as the star lands.
         var swell = MathF.Sin(Phase(t, .85, .6) * MathF.PI);
         var glow = (.35f + .3f * swell) * Phase(t, 0, .3) * backdrop;
-        // Concentric translucent discs keep the falloff smooth while bounding GPU overdraw.
-        for (var ring = 0; ring < 12; ring++)
+        // Many faint discs instead of a few strong ones keep the falloff free of visible bands.
+        // The splash plays for two seconds once per launch, so the overdraw is not worth halving.
+        for (var ring = 0; ring < 24; ring++)
         {
-            var radius = (170 - ring * 14) * s * (1 + .06f * swell);
-            draw.AddCircleFilled(center, radius, DactUi.U32(palette.Accent with { W = glow * .05f }), 48);
+            var radius = (170 - ring * 7) * s * (1 + .06f * swell);
+            draw.AddCircleFilled(center, radius, DactUi.U32(palette.Accent with { W = glow * .025f }), 64);
         }
 
         var baseSize = 156 * s;
@@ -253,7 +254,7 @@ public sealed partial class ControlCenterWindow
         {
             if (to <= from || alpha <= 0) return;
             draw.PushClipRect(Screen(Vector2.Zero), Screen(new Vector2(512)), true);
-            var steps = (int)MathF.Ceiling((to - from) / 8);
+            var steps = (int)MathF.Ceiling((to - from) / 4);
             for (var step = 0; step < steps; step++)
             {
                 var a = OrbitPoint(from + (to - from) * step / steps, 1.6f);
@@ -268,16 +269,16 @@ public sealed partial class ControlCenterWindow
             strength *= opacity;
             if (strength <= 0) return;
             // A tapering tail along the orbit, then a white core inside a lavender halo.
-            for (var tail = 8; tail >= 1; tail--)
+            for (var tail = 12; tail >= 1; tail--)
             {
-                var point = Screen(OrbitPoint(degrees - tail * 5.25f));
-                var fade = 1 - tail / 9f;
-                draw.AddCircleFilled(point, (4 + 10 * fade) * k, DactUi.U32(new Vector4(.8f, .76f, 1, strength * fade * .48f)), 14);
+                var point = Screen(OrbitPoint(degrees - tail * 3.5f));
+                var fade = 1 - tail / 13f;
+                draw.AddCircleFilled(point, (4 + 10 * fade) * k, DactUi.U32(new Vector4(.8f, .76f, 1, strength * fade * .45f)), 16);
             }
             var head = Screen(OrbitPoint(degrees));
-            for (var halo = 0; halo < 5; halo++)
-                draw.AddCircleFilled(head, (64 - halo * 11) * k, DactUi.U32(new Vector4(.72f, .68f, 1, strength * .14f)), 24);
-            draw.AddCircleFilled(head, 13 * k, DactUi.U32(new Vector4(1, 1, 1, strength)), 18);
+            for (var halo = 0; halo < 8; halo++)
+                draw.AddCircleFilled(head, (64 - halo * 7) * k, DactUi.U32(new Vector4(.72f, .68f, 1, strength * .09f)), 32);
+            draw.AddCircleFilled(head, 13 * k, DactUi.U32(new Vector4(1, 1, 1, strength)), 20);
         }
 
         // The orbit runs from its tail behind the cards (10°) once around to its end in front (395°).

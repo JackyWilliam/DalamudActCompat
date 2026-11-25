@@ -393,7 +393,8 @@ public sealed class Plugin : IDalamudPlugin
             enableMemoryProtection: true,
             packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null,
             pluginDirectoryProvider: () => paths.ActPluginDirectory,
-            entityEpochClock: hostEntityEpochClock);
+            entityEpochClock: hostEntityEpochClock,
+            sharedAssemblyDirectory: pluginAssemblyDirectory);
         // AI 助手 requests leave from a separate Host process so accelerators that capture the
         // game process (NetEase UU) do not tunnel them into an unsupported region.
         AiClient.Relay = new AiRelay(hostSupervisor.PrepareExecutable, logger);
@@ -413,7 +414,8 @@ public sealed class Plugin : IDalamudPlugin
             logger,
             matchaEventsEnabled: () => Volatile.Read(ref matchaEventsEnabled) == 1,
             packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null,
-            pluginDirectoryProvider: () => paths.ActPluginDirectory);
+            pluginDirectoryProvider: () => paths.ActPluginDirectory,
+            sharedAssemblyDirectory: pluginAssemblyDirectory);
         matchaHostSupervisor.MatchaNotificationRequested += OnMatchaNotificationRequested;
         matchaHostSupervisor.MatchaLogLineRequested += OnMatchaLogLineRequested;
         matchaHostSupervisor.MatchaTtsRequested += OnMatchaTtsRequested;
@@ -431,7 +433,8 @@ public sealed class Plugin : IDalamudPlugin
             genericIpcClient,
             logger,
             packagedHostDirectory: hasPackagedHostResources ? packagedHostDirectory : null,
-            pluginDirectoryProvider: () => paths.ActPluginDirectory);
+            pluginDirectoryProvider: () => paths.ActPluginDirectory,
+            sharedAssemblyDirectory: pluginAssemblyDirectory);
         genericHostSupervisor.MatchaTtsRequested += OnGenericTtsRequested;
         hostCommandWorker = Task.Run(
             () => RunHostCommandBrokerAsync(hostCommandCancellation.Token),

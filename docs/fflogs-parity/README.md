@@ -51,7 +51,7 @@ Run the regression suite with:
 ```powershell
 $dalamud = 'C:\Users\jacky\AppData\Roaming\XIVLauncherCN\addon\Hooks\dev\'
 dotnet build .\DalamudActCompat.slnx -c Release "-p:DalamudLibPath=$dalamud"
-& .\tests\DalamudActCompat.PackageSmokeTests\bin\Release\net10.0-windows10.0.17763.0\DalamudActCompat.PackageSmokeTests.exe
+& .\tests\DalamudActCompat.PackageSmokeTests\bin\Release\net10.0-windows\DalamudActCompat.PackageSmokeTests.exe
 ```
 
 Regenerate the packaged Combat Quality snapshot from the fixed 100-fight cache with:

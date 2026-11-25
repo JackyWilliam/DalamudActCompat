@@ -12,7 +12,7 @@ public sealed class CompatibilityHostAssets
     // Read-only runtime assemblies already shipped in the Core plugin package.
     // Excluding them from host-*.zip avoids downloading ~9 MB of duplicate binaries
     // (primarily FFXIV_ACT_Plugin.Resource.dll) while copying them locally on demand.
-    private static readonly string[] SharedPluginAssemblies =
+    internal static readonly string[] SharedPluginAssemblies =
     [
         "Advanced Combat Tracker.dll",
         "DalamudActCompat.Protocol.dll",
@@ -29,17 +29,25 @@ public sealed class CompatibilityHostAssets
     private readonly string targetDirectory;
     private readonly PluginLogger logger;
     private readonly Assembly assembly;
+    private readonly string? sharedAssemblyDirectory;
     private string? packagedHostDirectory;
 
     public CompatibilityHostAssets(
         string targetRootDirectory,
         PluginLogger logger,
-        string? packagedHostDirectory = null)
+        string? packagedHostDirectory = null,
+        string? sharedAssemblyDirectory = null)
     {
         this.logger = logger;
         this.packagedHostDirectory = string.IsNullOrWhiteSpace(packagedHostDirectory)
             ? null
             : Path.GetFullPath(packagedHostDirectory);
+        // The directory DACT is installed in, as Dalamud reports it. Dalamud loads plugins from
+        // memory, so Assembly.Location is only what Dalamud patches in; without the shared
+        // assemblies the Host cannot load a single ACT type, so the caller says where they are.
+        this.sharedAssemblyDirectory = string.IsNullOrWhiteSpace(sharedAssemblyDirectory)
+            ? null
+            : Path.GetFullPath(sharedAssemblyDirectory);
         assembly = typeof(CompatibilityHostAssets).Assembly;
         targetDirectory = Path.Combine(
             Path.GetFullPath(targetRootDirectory),
@@ -140,7 +148,7 @@ public sealed class CompatibilityHostAssets
             CopyFileAtomicallyIfChanged(source, Path.Combine(targetDirectory, fileName));
         }
 
-        var pluginDirectory = Path.GetDirectoryName(assembly.Location);
+        var pluginDirectory = sharedAssemblyDirectory ?? Path.GetDirectoryName(assembly.Location);
         if (!string.IsNullOrWhiteSpace(pluginDirectory) && Directory.Exists(pluginDirectory))
         {
             foreach (var fileName in SharedPluginAssemblies)
@@ -156,6 +164,19 @@ public sealed class CompatibilityHostAssets
                     CopyFileAtomicallyIfChanged(sharedSource, Path.Combine(targetDirectory, fileName));
                 }
             }
+        }
+
+        var missing = SharedPluginAssemblies
+            .Where(fileName => !File.Exists(Path.Combine(targetDirectory, fileName)))
+            .ToArray();
+        if (missing.Length > 0)
+        {
+            // The Host would still start and then fail on its first ACT type with nothing
+            // pointing back here, so name the files while the cause is known.
+            logger.Error(
+                new FileNotFoundException("Shared Host assemblies are missing.", missing[0]),
+                $"Compatibility host is missing {string.Join(", ", missing)}: not in the resource pack and not under {pluginDirectory ?? "<unknown plugin directory>"}.");
+            return;
         }
 
         logger.Information($"Compatibility host resource pack is available under {targetDirectory}.");

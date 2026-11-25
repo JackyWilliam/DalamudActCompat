@@ -237,7 +237,7 @@ internal static class AiClient
         }
     }
 
-    private static HttpRequestMessage CreateClaudeRequest(
+    internal static HttpRequestMessage CreateClaudeRequest(
         HttpMethod method,
         string url,
         string key,
@@ -246,7 +246,11 @@ internal static class AiClient
     {
         var request = new HttpRequestMessage(method, url);
         request.Headers.TryAddWithoutValidation("anthropic-version", AnthropicApiVersion);
-        Authorize(request, key);
+        // An Anthropic API key travels in x-api-key, which is what the official SDK sent before
+        // this client replaced it. Authorization: Bearer is for OAuth tokens there, and relays
+        // that speak the Claude protocol look for x-api-key.
+        if (!string.IsNullOrWhiteSpace(key))
+            request.Headers.TryAddWithoutValidation("x-api-key", key);
         if (!string.IsNullOrWhiteSpace(betaHeader))
             request.Headers.TryAddWithoutValidation("anthropic-beta", betaHeader);
         if (payload is not null)

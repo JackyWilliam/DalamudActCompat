@@ -17,6 +17,8 @@ internal sealed unsafe class WindowsNotificationCenter
     private static readonly Guid IidToastNotificationFactory = new("04124B20-82C6-4229-B109-FD9ED4662B53");
     private static readonly Guid IidToastNotificationManagerStatics = new("50AC103F-D235-4598-BBEF-98FE4D1A3AD4");
     private static readonly Guid IidPropertyValueStatics = new("629BDBC8-D932-4FF4-96B9-8D96C5C1E858");
+    // IReference<Windows.Foundation.DateTime>, the type put_ExpirationTime takes.
+    private static readonly Guid IidReferenceDateTime = new("5541D8A7-497C-5AA4-86FC-7713ADBF2A2C");
 
     public bool TryShow(string title, string message, string? detail = null)
     {
@@ -68,6 +70,7 @@ internal sealed unsafe class WindowsNotificationCenter
         nint toast = 0;
         nint propFactory = 0;
         nint expirationProp = 0;
+        nint expirationReference = 0;
         nint managerStatics = 0;
         nint notifier = 0;
         nint hXmlClass = 0;
@@ -108,8 +111,16 @@ internal sealed unsafe class WindowsNotificationCenter
                 var createDateTime = (delegate* unmanaged[Stdcall]<nint, long, nint*, int>)GetVTableSlot(propFactory, 21);
                 if (createDateTime(propFactory, expirationUtc.ToFileTime(), &expirationProp) >= 0 && expirationProp != 0)
                 {
-                    var putExpiration = (delegate* unmanaged[Stdcall]<nint, nint, int>)GetVTableSlot(toast, 7);
-                    _ = putExpiration(toast, expirationProp);
+                    // CreateDateTime hands back the boxed value as IInspectable. The setter
+                    // reads the time through IReference<DateTime>; given any other interface
+                    // of the box it would call the wrong method and take garbage for the time.
+                    // If the box does not offer that interface the toast simply does not expire.
+                    var iidReference = IidReferenceDateTime;
+                    if (QueryInterface(expirationProp, &iidReference, &expirationReference) >= 0 && expirationReference != 0)
+                    {
+                        var putExpiration = (delegate* unmanaged[Stdcall]<nint, nint, int>)GetVTableSlot(toast, 7);
+                        _ = putExpiration(toast, expirationReference);
+                    }
                 }
             }
 
@@ -132,6 +143,7 @@ internal sealed unsafe class WindowsNotificationCenter
         {
             ReleaseCom(notifier);
             ReleaseCom(managerStatics);
+            ReleaseCom(expirationReference);
             ReleaseCom(expirationProp);
             ReleaseCom(propFactory);
             ReleaseCom(toast);
