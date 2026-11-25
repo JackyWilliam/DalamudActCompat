@@ -2223,7 +2223,7 @@
   "No local network address was found for this PC. Check that it is connected to a network.": "找不到這台電腦的區域網路位址；請確認它已連上網路。",
   "Port": "連接埠",
   "Allow other devices on the local network to connect": "允許區域網路內的其他裝置連線",
-  "When on, any device on the same network can read your combat data and, if PostNamazu is enabled, send commands to the game through it. Use it only on a network you trust. Choose Allow if Windows Firewall asks.": "開啟後，同一網路裡的任何裝置都能讀到你的戰鬥資料；啟用 PostNamazu 時，還能透過它向遊戲傳送指令。請只在可信任的網路裡使用。Windows 防火牆詢問時需要選擇允許。",
+  "When on, any device on the same network can read your combat data, so use it only on a network you trust. Sending commands to the game through PostNamazu stays limited to overlays on this PC. Choose Allow if Windows Firewall asks.": "開啟後，同一網路裡的任何裝置都能讀到你的戰鬥資料，請只在可信任的網路裡使用。透過 PostNamazu 向遊戲傳送指令仍然只對這台電腦上的懸浮視窗開放。Windows 防火牆詢問時需要選擇允許。",
   "The server listens on a manually set address, {0}. It is kept unless you use the switch above.": "目前監聽的是手動設定的位址 {0}；不動上面的開關就會保留。",
   "The change could not be completed. Check the parser status; details are in the debug log.": "無法完成儲存，請檢查解析器狀態；詳情在除錯日誌裡。",
   "Saving restarts the parser, and open overlays reconnect.": "儲存後解析器會重啟，已開啟的懸浮視窗會重新連線。",

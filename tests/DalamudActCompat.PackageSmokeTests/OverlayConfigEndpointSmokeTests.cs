@@ -109,7 +109,7 @@ internal static class OverlayConfigEndpointSmokeTests
             => OverlayWebSocketEndpointSwitch.Apply(server, config, address, port).Status;
     }
 
-    private static int FreePort()
+    internal static int FreePort()
     {
         var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
         listener.Start();

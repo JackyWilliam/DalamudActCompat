@@ -164,6 +164,7 @@ try
     {
         OverlayConfigEndpointSmokeTests.Run(testRoot);
         OverlayConfigEndpointSmokeTests.RunEndpointSwitch();
+        await OverlayLocalOnlyHandlerSmokeTests.RunAsync();
         return 0;
     }
     if (args.Contains("--diagnostic-report-only", StringComparer.Ordinal))
@@ -416,6 +417,7 @@ try
     ValidateHtmlOverlayDefaults();
     OverlayConfigEndpointSmokeTests.Run(testRoot);
     OverlayConfigEndpointSmokeTests.RunEndpointSwitch();
+    await OverlayLocalOnlyHandlerSmokeTests.RunAsync();
     OverlayHotkeySmokeTests.Run();
     await DisplayOptionsSmokeTests.RunAsync();
     if (string.Equals(

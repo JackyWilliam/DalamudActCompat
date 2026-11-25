@@ -13,7 +13,10 @@ internal sealed class PostNamazuEventSource : EventSourceBase
         : base(container)
     {
         Name = EventSourceName;
-        RegisterEventHandler("PostNamazu", HandleAction);
+        // PostNamazu sends commands into the game. The WebSocket has no authentication, so
+        // with the server opened to the local network this must not be reachable from other
+        // devices; overlays and the ACT host on this PC are unaffected.
+        RegisterLocalEventHandler("PostNamazu", HandleAction);
     }
 
     public void SetAction(Action<string, string>? nextAction)

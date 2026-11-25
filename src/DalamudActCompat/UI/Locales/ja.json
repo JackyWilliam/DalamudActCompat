@@ -2223,7 +2223,7 @@
   "No local network address was found for this PC. Check that it is connected to a network.": "この PC のローカルネットワークアドレスが見つかりません。ネットワークに接続されているか確認してください。",
   "Port": "ポート",
   "Allow other devices on the local network to connect": "ローカルネットワーク上の他のデバイスからの接続を許可",
-  "When on, any device on the same network can read your combat data and, if PostNamazu is enabled, send commands to the game through it. Use it only on a network you trust. Choose Allow if Windows Firewall asks.": "オンにすると、同じネットワーク上のどのデバイスからも戦闘データを読み取れ、PostNamazu が有効な場合はそれを通じてゲームにコマンドを送ることもできます。信頼できるネットワークでのみ使用してください。Windows ファイアウォールの確認が表示されたら「許可」を選んでください。",
+  "When on, any device on the same network can read your combat data, so use it only on a network you trust. Sending commands to the game through PostNamazu stays limited to overlays on this PC. Choose Allow if Windows Firewall asks.": "オンにすると、同じネットワーク上のどのデバイスからも戦闘データを読み取れます。信頼できるネットワークでのみ使用してください。PostNamazu を通じたゲームへのコマンド送信は、引き続きこの PC 上のオーバーレイに限られます。Windows ファイアウォールの確認が表示されたら「許可」を選んでください。",
   "The server listens on a manually set address, {0}. It is kept unless you use the switch above.": "サーバーは手動で設定されたアドレス {0} で待ち受けています。上のスイッチを操作しない限り、そのまま維持されます。",
   "The change could not be completed. Check the parser status; details are in the debug log.": "変更を完了できませんでした。パーサーの状態を確認してください。詳細はデバッグログにあります。",
   "Saving restarts the parser, and open overlays reconnect.": "保存するとパーサーが再起動し、開いているオーバーレイは再接続されます。",

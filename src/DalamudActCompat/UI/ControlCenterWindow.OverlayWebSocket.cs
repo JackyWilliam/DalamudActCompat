@@ -109,12 +109,12 @@ public sealed partial class ControlCenterWindow
                 overlayWebSocketPortDraft = new string(overlayWebSocketPortDraft.Where(char.IsAsciiDigit).Take(5).ToArray());
             DactUi.EndField();
             var lan = overlayWebSocketLanDraft;
-            // The socket has no authentication and also carries the PostNamazu call handler,
-            // so the warning names both what can be read and what can be sent.
+            // The socket has no authentication. Calls that act on the game (PostNamazu) are
+            // refused to other devices by the server, so the warning is about what they can read.
             if (DactUi.ToggleRow(text.Get("允许局域网内的其他设备连接", "Allow other devices on the local network to connect"), ref lan,
                     text.Get(
-                        "开启后，同一网络里的任何设备都能读到你的战斗数据；启用了 PostNamazu 时，还能通过它向游戏发送指令。只在可信的网络里使用。Windows 防火墙询问时需要选择允许。",
-                        "When on, any device on the same network can read your combat data and, if PostNamazu is enabled, send commands to the game through it. Use it only on a network you trust. Choose Allow if Windows Firewall asks."),
+                        "开启后，同一网络里的任何设备都能读到你的战斗数据，只在可信的网络里使用。通过 PostNamazu 向游戏发指令仍然只对这台电脑上的悬浮窗开放。Windows 防火墙询问时需要选择允许。",
+                        "When on, any device on the same network can read your combat data, so use it only on a network you trust. Sending commands to the game through PostNamazu stays limited to overlays on this PC. Choose Allow if Windows Firewall asks."),
                     disabled: busy))
             {
                 overlayWebSocketLanDraft = lan;
