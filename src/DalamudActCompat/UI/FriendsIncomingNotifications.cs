@@ -36,6 +36,7 @@ internal sealed class FriendsIncomingNotifications
     private readonly Dictionary<string, long> observed = new(StringComparer.Ordinal);
     private readonly List<FriendIncomingNotification> visible = [];
     private CloudFriendsSession session;
+    private FriendsChatSnapshot? lastProcessedState;
     internal IReadOnlyList<FriendIncomingNotification> Visible => visible;
     internal void ClearVisible() => visible.Clear();
 
@@ -43,33 +44,70 @@ internal sealed class FriendsIncomingNotifications
     {
         if (session != state.Session)
         {
-            session = state.Session; observed.Clear(); visible.Clear();
+            session = state.Session; observed.Clear(); visible.Clear(); lastProcessedState = null;
         }
-        visible.RemoveAll(n => now >= n.ExpiresAt || !state.Conversations.ContainsKey(n.Message.ConversationId));
+        for (var i = visible.Count - 1; i >= 0; i--)
+        {
+            var entry = visible[i];
+            if (now >= entry.ExpiresAt || !state.Conversations.ContainsKey(entry.Message.ConversationId))
+                visible.RemoveAt(i);
+        }
         if (!enabled || !state.Session.IsSignedIn) visible.Clear();
         if (!state.Session.IsSignedIn || !state.InitialSyncComplete) return false;
-        foreach (var id in observed.Keys.Where(id => !state.Conversations.ContainsKey(id)).ToArray()) observed.Remove(id);
-        var incoming = new List<CloudChatMessage>();
+        if (ReferenceEquals(state, lastProcessedState)) return false;
+        lastProcessedState = state;
+
+        List<string>? staleIds = null;
+        foreach (var id in observed.Keys)
+        {
+            if (!state.Conversations.ContainsKey(id))
+            {
+                staleIds ??= [];
+                staleIds.Add(id);
+            }
+        }
+        if (staleIds is not null)
+        {
+            foreach (var id in staleIds) observed.Remove(id);
+        }
+
+        List<CloudChatMessage>? incoming = null;
+        var selfUserId = state.Friends?.User?.Id;
         foreach (var (id, view) in state.Conversations)
         {
             // Conversations are refreshed separately, so a global moving watermark
             // would drop a lower-ID arrival loaded after another chat's higher ID.
             var through = observed.GetValueOrDefault(id, state.NotificationBaseline);
-            foreach (var message in view.Chat.History.Concat(view.Chat.Pending).DistinctBy(m => m.Id))
+            var maxSeen = through;
+            HashSet<long>? seenNewIds = null;
+            void InspectMessage(CloudChatMessage message)
             {
-                if (message.Id > through && message.RecipientId == state.Friends?.User?.Id &&
-                    message.Sender.UserId != state.Friends?.User?.Id) incoming.Add(message);
-                observed[id] = Math.Max(observed.GetValueOrDefault(id, through), message.Id);
+                if (message.Id > maxSeen) maxSeen = message.Id;
+                if (message.Id <= through) return;
+                seenNewIds ??= [];
+                if (!seenNewIds.Add(message.Id)) return;
+                if (message.RecipientId == selfUserId && message.Sender.UserId != selfUserId)
+                {
+                    incoming ??= [];
+                    incoming.Add(message);
+                }
             }
-            observed.TryAdd(id, through);
+            foreach (var message in view.Chat.History) InspectMessage(message);
+            foreach (var message in view.Chat.Pending) InspectMessage(message);
+            observed[id] = maxSeen;
         }
         // Advance watermarks while disabled, too: re-enabling must not replay a
         // backlog. Newest is always at the top, regardless of dictionary order.
+        if (incoming is null) return false;
         if (enabled)
-            foreach (var message in incoming.OrderBy(m => m.Id).TakeLast(3)) visible.Insert(0, new(message, now));
-        visible.Sort((left, right) => right.Message.Id.CompareTo(left.Message.Id));
-        if (visible.Count > 3) visible.RemoveRange(3, visible.Count - 3);
-        return incoming.Count > 0;
+        {
+            incoming.Sort(static (left, right) => left.Id.CompareTo(right.Id));
+            var start = Math.Max(0, incoming.Count - 3);
+            for (var i = start; i < incoming.Count; i++) visible.Insert(0, new(incoming[i], now));
+            visible.Sort(static (left, right) => right.Message.Id.CompareTo(left.Message.Id));
+            if (visible.Count > 3) visible.RemoveRange(3, visible.Count - 3);
+        }
+        return true;
     }
 
     internal static IReadOnlyList<string> Replies(CloudChatMessage message, UiText? text = null) => message.Sender.IsOfficial ? [] : message.QuickMessageId switch

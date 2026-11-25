@@ -13,6 +13,24 @@ internal static class AiAssistantSmokeTests
         JobNotes();
         ReviewFromLog(testRoot);
         PromptCarriesJobNotes();
+        ClaudeRequestHeaders();
+    }
+
+    // The official SDK this client replaced sent the key in x-api-key. Relays that speak the
+    // Claude protocol look only there, so a Bearer header would lock those players out.
+    private static void ClaudeRequestHeaders()
+    {
+        using var request = AiClient.CreateClaudeRequest(
+            HttpMethod.Post, "https://example.invalid/v1/messages", "sk-test", "{}", "server-side-fallback-2026-07-01");
+        Assert(request.Headers.TryGetValues("x-api-key", out var keys) && keys.SequenceEqual(["sk-test"]) &&
+               request.Headers.Authorization is null,
+            "A Claude request must carry the API key in x-api-key and nothing in Authorization.");
+        Assert(request.Headers.TryGetValues("anthropic-version", out var versions) && versions.Single().Length > 0 &&
+               request.Headers.TryGetValues("anthropic-beta", out var betas) && betas.Single() == "server-side-fallback-2026-07-01",
+            "A Claude request lost its version or beta header.");
+        using var keyless = AiClient.CreateClaudeRequest(HttpMethod.Get, "https://example.invalid/v1/models", "", null, null);
+        Assert(!keyless.Headers.Contains("x-api-key") && !keyless.Headers.Contains("anthropic-beta"),
+            "An empty key or beta must not produce empty headers.");
     }
 
     private static void Providers()

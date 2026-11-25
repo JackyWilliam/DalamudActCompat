@@ -50,14 +50,22 @@ public sealed class HorizontalMeterWindow : Window
 
     private MeterWindowProfile Profile => configuration.Meter.HorizontalWindow;
 
+    private string? windowTitleLanguage;
+
     public override bool DrawConditions()
     {
-        WindowName = text.Get(
-            "横版战斗统计###DalamudActCompatHorizontalMeter",
-            "Horizontal Combat Meter###DalamudActCompatHorizontalMeter");
         if (!configuration.Meter.IsVisible || !Profile.IsEnabled)
         {
             return false;
+        }
+
+        var lang = text.Language;
+        if (windowTitleLanguage != lang)
+        {
+            windowTitleLanguage = lang;
+            WindowName = text.Get(
+                "横版战斗统计###DalamudActCompatHorizontalMeter",
+                "Horizontal Combat Meter###DalamudActCompatHorizontalMeter");
         }
 
         var now = Environment.TickCount64;

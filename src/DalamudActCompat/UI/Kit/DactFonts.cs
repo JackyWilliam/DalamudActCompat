@@ -7,7 +7,8 @@ namespace DalamudActCompat.UI.Kit;
 // Type scale of the 1.0 design. Sizes are the Figma values; 13 is the body text, which is
 // Dalamud's default font, and every other size is built from the same default font so CJK
 // coverage matches the rest of the UI. Scaling the bitmap of the 17 px font instead would
-// blur titles.
+// blur titles. Registering handles at startup lets Dalamud build them asynchronously before
+// the user opens the control center, avoiding an atlas rebuild hitch during the splash animation.
 internal static class DactFonts
 {
     public const int Title = 18, H2 = 15, Body = 13, Small = 12, Tiny = 11;

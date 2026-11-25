@@ -936,6 +936,35 @@ static void ValidateVersionedCompatibilityHostExtraction(string testRoot)
     Assert(
         File.Exists(Path.Combine(lateBoundAssets.TargetDirectory, "DalamudActCompat.Host.exe")),
         "A Host resource pack completed after plugin construction but was not accepted for startup.");
+
+    // The Host resource pack no longer carries the ACT / FFXIV_ACT_Plugin assemblies the core
+    // package already ships. They must reach the Host from the install directory the plugin
+    // passes in (the one Dalamud reports), not from wherever the runtime says the plugin
+    // assembly was loaded: marker contents tell the two sources apart here.
+    var slimPack = Path.Combine(testRoot, "host-pack-without-shared");
+    var installDirectory = Path.Combine(testRoot, "plugin-install-directory");
+    Directory.CreateDirectory(slimPack);
+    Directory.CreateDirectory(installDirectory);
+    File.WriteAllText(Path.Combine(slimPack, "DalamudActCompat.Host.exe"), "slim host pack");
+    foreach (var name in CompatibilityHostAssets.SharedPluginAssemblies)
+    {
+        File.WriteAllText(Path.Combine(installDirectory, name), "from install directory: " + name);
+    }
+
+    var sharedAssets = new CompatibilityHostAssets(
+        Path.Combine(testRoot, "shared-host-assets"),
+        new PluginLogger(log),
+        slimPack,
+        installDirectory);
+    sharedAssets.EnsureExtracted();
+    Assert(
+        CompatibilityHostAssets.SharedPluginAssemblies.Length == 10 &&
+        CompatibilityHostAssets.SharedPluginAssemblies.All(name =>
+            File.ReadAllText(Path.Combine(sharedAssets.TargetDirectory, name)) == "from install directory: " + name),
+        "Shared Host assemblies were not taken from the install directory the plugin passed in.");
+    Assert(
+        File.ReadAllText(Path.Combine(sharedAssets.TargetDirectory, "DalamudActCompat.Host.exe")) == "slim host pack",
+        "The slim Host resource pack itself was not copied.");
 }
 
 static async Task ValidateResourcePackLifecycleAsync(string testRoot)

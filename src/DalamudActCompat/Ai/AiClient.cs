@@ -4,9 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
-using Anthropic;
-using Anthropic.Exceptions;
-using Anthropic.Models.Beta.Messages;
 
 namespace DalamudActCompat.Ai;
 
@@ -19,14 +16,17 @@ internal sealed record AiCall(string System, IReadOnlyList<AiTurn> Turns, string
 internal sealed class AiServiceException(string message) : Exception(message);
 
 // Sends AI 助手 requests straight from the player's PC to the service they chose, with their
-// own key; DACT servers never see the request or the key. Claude goes through the official
-// Anthropic SDK; OpenAI and xAI through their Responses API; every other service through the
-// chat-completions protocol they share. All of them travel through AiRelayHandler, which sends
-// them from the AI relay process when one is available (see AiRelayProtocol).
+// own key; DACT servers never see the request or the key. Claude goes through the Messages API;
+// OpenAI and xAI through their Responses API; every other service through the chat-completions
+// protocol they share. All of them travel through AiRelayHandler, which sends them from the AI
+// relay process when one is available (see AiRelayProtocol).
 internal static class AiClient
 {
     // The model used when the player leaves 模型 on 推荐（自动选择） with Claude.
     public const string RecommendedClaudeModel = "claude-opus-5-5";
+
+    private const string AnthropicApiVersion = "2026-10-21";
+    private const int ClaudeMaxRetries = 2;
 
     // Long enough for a full review in JSON, including reasoning tokens on thinking models.
     private const int MaxOutputTokens = 16000;
@@ -75,15 +75,7 @@ internal static class AiClient
         var provider = AiProviders.Get(settings.Provider);
         if (Protocol(settings) == AiProtocol.Claude)
         {
-            try
-            {
-                var page = await CreateClaudeClient(settings, key).Models.List(cancellationToken: cancellationToken).ConfigureAwait(false);
-                return page.Items.Select(model => model.ID).ToArray();
-            }
-            catch (Exception exception) when (exception is AnthropicException or HttpRequestException or TaskCanceledException)
-            {
-                throw new AiServiceException(DescribeClaudeFailure(exception));
-            }
+            return await ListClaudeModelsAsync(settings, key, cancellationToken).ConfigureAwait(false);
         }
 
         var endpoint = settings.ResolvedEndpoint;
@@ -133,17 +125,12 @@ internal static class AiClient
 
     // ---- Claude
 
-    private static AnthropicClient CreateClaudeClient(AiSettings settings, string key) => new()
+    private static string ResolveClaudeBaseUrl(AiSettings settings)
     {
-        ApiKey = key,
-        BaseUrl = settings.ResolvedEndpoint,
-        Timeout = RequestTimeout,
-        MaxRetries = 2,
-        // A fresh wrapper per client: the SDK may configure the HttpClient it is given, and a
-        // shared instance refuses changes after its first request. Its own 100 s default would
-        // also cut the SDK's 3-minute timeout short, so the SDK alone enforces the limit.
-        HttpClient = new HttpClient(Transport, disposeHandler: false) { Timeout = Timeout.InfiniteTimeSpan },
-    };
+        var endpoint = settings.ResolvedEndpoint;
+        if (string.IsNullOrWhiteSpace(endpoint)) throw new AiServiceException("请先填写接口地址。");
+        return endpoint.TrimEnd('/');
+    }
 
     private static bool IsOfficialClaudeEndpoint(AiSettings settings)
         => Uri.TryCreate(settings.ResolvedEndpoint, UriKind.Absolute, out var uri) &&
@@ -156,46 +143,188 @@ internal static class AiClient
            !model.StartsWith("claude-sonnet-4-5", StringComparison.OrdinalIgnoreCase) &&
            !model.StartsWith("claude-haiku-4-5", StringComparison.OrdinalIgnoreCase);
 
-    private static async Task<string> CompleteClaudeAsync(AiSettings settings, string key, string model, AiCall call, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<string>> ListClaudeModelsAsync(AiSettings settings, string key, CancellationToken cancellationToken)
     {
-        var client = CreateClaudeClient(settings, key);
-        var official = IsOfficialClaudeEndpoint(settings);
-        var parameters = new MessageCreateParams
-        {
-            Model = model,
-            MaxTokens = MaxOutputTokens,
-            System = call.System,
-            Messages = call.Turns.Select(turn => turn.FromUser
-                ? (BetaMessageParam)new BetaUserMessageParam { Content = turn.Text }
-                : new BetaAssistantMessageParam { Content = turn.Text }).ToList(),
-            OutputConfig = new BetaOutputConfig
-            {
-                Effort = SupportsEffort(model) ? call.Effort switch { "low" => Effort.Low, "high" => Effort.High, _ => Effort.Medium } : null,
-                Format = new BetaJsonOutputFormat { Schema = AiReplyFormat.Schema },
-            },
-            // A policy decline is re-served by Anthropic's default fallback model inside the same
-            // call. Proxies and gateways may not know the beta, so only the official API gets it.
-            Betas = official ? ["server-side-fallback-2026-07-01"] : null,
-            Fallbacks = official ? (BetaFallbacksParam)new Default() : null,
-        };
-        BetaMessage message;
+        var url = ResolveClaudeBaseUrl(settings) + "/v1/models";
+        var (status, body) = await SendClaudeWithRetryAsync(
+            () => CreateClaudeRequest(HttpMethod.Get, url, key, payload: null, betaHeader: null),
+            cancellationToken).ConfigureAwait(false);
+        EnsureClaudeSuccess(status, body);
         try
         {
-            message = await client.Beta.Messages.Create(parameters, cancellationToken).ConfigureAwait(false);
+            return (JsonNode.Parse(body)?["data"]?.AsArray() ?? [])
+                .Select(item => item?["id"]?.GetValue<string>())
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id!)
+                .ToArray();
         }
-        catch (Exception exception) when (exception is AnthropicException or HttpRequestException or TaskCanceledException)
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
         {
-            throw new AiServiceException(DescribeClaudeFailure(exception));
+            throw new AiServiceException("接口返回的模型列表无法识别，请检查接口地址。");
+        }
+    }
+
+    private static async Task<string> CompleteClaudeAsync(AiSettings settings, string key, string model, AiCall call, CancellationToken cancellationToken)
+    {
+        var official = IsOfficialClaudeEndpoint(settings);
+        var messages = new JsonArray();
+        foreach (var turn in call.Turns)
+        {
+            messages.Add(new JsonObject
+            {
+                ["role"] = turn.FromUser ? "user" : "assistant",
+                ["content"] = turn.Text,
+            });
         }
 
-        if (message.StopReason == "refusal")
-            throw new AiServiceException("AI 服务拒绝回答这次请求。换个说法再试一次。");
-        if (message.StopReason == "max_tokens")
-            throw new AiServiceException("回答太长被截断了：请换一个输出上限更高的模型，或把问题拆小。");
-        var text = new StringBuilder();
-        foreach (var block in message.Content)
-            if (block.TryPickText(out var part)) text.Append(part.Text);
-        return text.ToString();
+        var outputConfig = new JsonObject
+        {
+            ["format"] = new JsonObject
+            {
+                ["type"] = "json_schema",
+                ["schema"] = JsonSerializer.SerializeToNode(AiReplyFormat.Schema),
+            },
+        };
+        if (SupportsEffort(model))
+        {
+            outputConfig["effort"] = call.Effort switch { "low" => "low", "high" => "high", _ => "medium" };
+        }
+
+        var body = new JsonObject
+        {
+            ["model"] = model,
+            ["max_tokens"] = MaxOutputTokens,
+            ["system"] = call.System,
+            ["messages"] = messages,
+            ["output_config"] = outputConfig,
+        };
+        // A policy decline is re-served by Anthropic's default fallback model inside the same
+        // call. Proxies and gateways may not know the beta, so only the official API gets it.
+        string? betaHeader = null;
+        if (official)
+        {
+            betaHeader = "server-side-fallback-2026-07-01";
+            body["fallbacks"] = "default";
+        }
+
+        var url = ResolveClaudeBaseUrl(settings) + "/v1/messages";
+        var payload = body.ToJsonString();
+        var (status, responseText) = await SendClaudeWithRetryAsync(
+            () => CreateClaudeRequest(HttpMethod.Post, url, key, payload, betaHeader),
+            cancellationToken).ConfigureAwait(false);
+        EnsureClaudeSuccess(status, responseText);
+
+        try
+        {
+            var root = JsonNode.Parse(responseText);
+            var stopReason = root?["stop_reason"]?.GetValue<string>();
+            if (stopReason == "refusal")
+                throw new AiServiceException("AI 服务拒绝回答这次请求。换个说法再试一次。");
+            if (stopReason == "max_tokens")
+                throw new AiServiceException("回答太长被截断了：请换一个输出上限更高的模型，或把问题拆小。");
+
+            var text = new StringBuilder();
+            foreach (var block in root?["content"]?.AsArray() ?? [])
+            {
+                if (block?["type"]?.GetValue<string>() == "text")
+                    text.Append(block["text"]?.GetValue<string>());
+            }
+            return text.ToString();
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            throw new AiServiceException("接口返回的内容无法识别，请检查接口地址。");
+        }
+    }
+
+    internal static HttpRequestMessage CreateClaudeRequest(
+        HttpMethod method,
+        string url,
+        string key,
+        string? payload,
+        string? betaHeader)
+    {
+        var request = new HttpRequestMessage(method, url);
+        request.Headers.TryAddWithoutValidation("anthropic-version", AnthropicApiVersion);
+        // An Anthropic API key travels in x-api-key, which is what the official SDK sent before
+        // this client replaced it. Authorization: Bearer is for OAuth tokens there, and relays
+        // that speak the Claude protocol look for x-api-key.
+        if (!string.IsNullOrWhiteSpace(key))
+            request.Headers.TryAddWithoutValidation("x-api-key", key);
+        if (!string.IsNullOrWhiteSpace(betaHeader))
+            request.Headers.TryAddWithoutValidation("anthropic-beta", betaHeader);
+        if (payload is not null)
+            request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+        return request;
+    }
+
+    private static async Task<(HttpStatusCode Status, string Body)> SendClaudeWithRetryAsync(
+        Func<HttpRequestMessage> buildRequest,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var request = buildRequest();
+                using var response = await Http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                if (attempt < ClaudeMaxRetries && ShouldRetryClaudeStatus(response.StatusCode))
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * (1 << attempt)), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+                return (response.StatusCode, body);
+            }
+            catch (TaskCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (TaskCanceledException)
+            {
+                if (attempt < ClaudeMaxRetries)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * (1 << attempt)), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+                throw new AiServiceException("AI 服务响应超时，请稍后再试。");
+            }
+            catch (HttpRequestException)
+            {
+                if (attempt < ClaudeMaxRetries)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(500 * (1 << attempt)), cancellationToken).ConfigureAwait(false);
+                    continue;
+                }
+                throw new AiServiceException("连不上 AI 服务：请检查网络、代理或接口地址。");
+            }
+        }
+    }
+
+    private static bool ShouldRetryClaudeStatus(HttpStatusCode status)
+        => status is HttpStatusCode.RequestTimeout or HttpStatusCode.Conflict or HttpStatusCode.TooManyRequests
+           || (int)status >= 500;
+
+    private static void EnsureClaudeSuccess(HttpStatusCode status, string body)
+    {
+        if ((int)status is >= 200 and < 300) return;
+        string? detail = null;
+        try
+        {
+            var error = JsonNode.Parse(body)?["error"];
+            detail = error is JsonValue ? error.GetValue<string>() : error?["message"]?.GetValue<string>();
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException) { }
+        throw new AiServiceException((int)status switch
+        {
+            401 => "API Key 无效：请确认复制完整，没有多余空格。",
+            403 => IsRegionRefusal(body) ? RegionRefusal : DescribeForbidden(detail),
+            404 => "找不到这个模型或接口，请检查「模型」和「接口地址」。",
+            429 => "请求太频繁或额度已用完，请稍后再试，或检查账户余额。",
+            400 => $"请求被拒绝：{Shorten(detail ?? body)}",
+            >= 500 => "AI 服务暂时不可用，请稍后再试。",
+            _ => $"AI 服务返回错误：{Shorten(detail ?? body)}",
+        });
     }
 
     // OpenAI answers 403 unsupported_country_region_territory ("Country, region, or territory
@@ -216,20 +345,6 @@ internal static class AiClient
         => IsRegionRefusal(detail) ? RegionRefusal
             : string.IsNullOrWhiteSpace(detail) ? "这个 Key 没有权限使用该模型或接口。"
             : $"这个 Key 没有权限使用该模型或接口：{Shorten(detail)}";
-
-    private static string DescribeClaudeFailure(Exception exception) => exception switch
-    {
-        AnthropicUnauthorizedException => "API Key 无效：请确认复制完整，没有多余空格。",
-        AnthropicForbiddenException forbidden => DescribeForbidden(forbidden.Message),
-        AnthropicNotFoundException => "找不到这个模型或接口，请检查「模型」和「接口地址」。",
-        AnthropicRateLimitException => "请求太频繁或额度已用完，请稍后再试，或检查账户余额。",
-        AnthropicBadRequestException bad => $"请求被拒绝：{Shorten(bad.Message)}",
-        Anthropic5xxException => "AI 服务暂时不可用，请稍后再试。",
-        AnthropicIOException or HttpRequestException => "连不上 AI 服务：请检查网络、代理或接口地址。",
-        TaskCanceledException => "AI 服务响应超时，请稍后再试。",
-        AnthropicApiException api => $"AI 服务返回错误：{Shorten(api.Message)}",
-        _ => $"请求失败：{Shorten(exception.Message)}",
-    };
 
     // ---- OpenAI / xAI Responses API
 

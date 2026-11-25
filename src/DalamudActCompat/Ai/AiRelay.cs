@@ -13,17 +13,22 @@ internal sealed class AiRelay : IDisposable
 {
     // A cold start of the relay process takes well under a second; give a slow disk some room.
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(8);
+    // Reclaim the relay process's memory after an idle period; the next request respawns it seamlessly.
+    private static readonly TimeSpan IdleShutdownDelay = TimeSpan.FromMinutes(10);
     private readonly Func<string?> hostExecutable;
     private readonly PluginLogger? logger;
     private readonly object sync = new();
+    private readonly Timer idleTimer;
     private Process? process;
     private string? pipeName;
+    private int activeRequests;
     private bool disposed;
 
     public AiRelay(Func<string?> hostExecutable, PluginLogger? logger)
     {
         this.hostExecutable = hostExecutable;
         this.logger = logger;
+        idleTimer = new Timer(OnIdleTimer, null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
     }
 
     internal int ProcessId
@@ -31,6 +36,44 @@ internal sealed class AiRelay : IDisposable
         get
         {
             lock (sync) return process is { HasExited: false } running ? running.Id : 0;
+        }
+    }
+
+    internal void BeginRequest()
+    {
+        lock (sync)
+        {
+            activeRequests++;
+            if (!disposed)
+            {
+                idleTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+            }
+        }
+    }
+
+    internal void EndRequest()
+    {
+        lock (sync)
+        {
+            activeRequests = Math.Max(0, activeRequests - 1);
+            if (!disposed && activeRequests == 0 && process is { HasExited: false })
+            {
+                idleTimer.Change(IdleShutdownDelay, Timeout.InfiniteTimeSpan);
+            }
+        }
+    }
+
+    private void OnIdleTimer(object? state)
+    {
+        lock (sync)
+        {
+            if (disposed || activeRequests > 0 || process is not { HasExited: false })
+            {
+                return;
+            }
+
+            logger?.Information($"AI relay process {process.Id} stopped after idle timeout.");
+            StopLocked();
         }
     }
 
@@ -130,9 +173,12 @@ internal sealed class AiRelay : IDisposable
     {
         lock (sync)
         {
+            if (disposed) return;
             disposed = true;
+            idleTimer.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
             StopLocked();
         }
+        idleTimer.Dispose();
     }
 }
 
@@ -159,67 +205,76 @@ internal sealed class AiRelayHandler : HttpMessageHandler
 
     protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
     {
-        var pipe = relay() is { } current
-            ? await current.TryConnectAsync(cancellationToken).ConfigureAwait(false)
-            : null;
-        if (pipe is null)
+        var current = relay();
+        current?.BeginRequest();
+        try
         {
-            LastRoute = "direct";
-            return await direct.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var pipe = current is not null
+                ? await current.TryConnectAsync(cancellationToken).ConfigureAwait(false)
+                : null;
+            if (pipe is null)
+            {
+                LastRoute = "direct";
+                return await direct.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+
+            LastRoute = "relay";
+            await using (pipe.ConfigureAwait(false))
+            {
+                var body = request.Content is null
+                    ? null
+                    : await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+                var headers = request.Headers
+                    .Concat(request.Content?.Headers ?? Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>())
+                    .SelectMany(header => header.Value.Select(value => new AiRelayHeader(header.Key, value)))
+                    .ToArray();
+                var outgoing = new AiRelayRequest(request.Method.Method, request.RequestUri!.AbsoluteUri, headers, body);
+                AiRelayResponse? answer;
+                // Closing the pipe is the cancel signal the relay listens for.
+                using (cancellationToken.Register(static state => ((Stream)state!).Dispose(), pipe))
+                {
+                    try
+                    {
+                        await AiRelayProtocol.WriteAsync(pipe, outgoing, cancellationToken).ConfigureAwait(false);
+                        answer = await AiRelayProtocol.ReadAsync<AiRelayResponse>(pipe, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) when (cancellationToken.IsCancellationRequested &&
+                                               ex is IOException or ObjectDisposedException or OperationCanceledException)
+                    {
+                        throw new OperationCanceledException(cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidDataException)
+                    {
+                        throw new HttpRequestException($"The AI relay process stopped during the request: {ex.Message}", ex);
+                    }
+                }
+
+                if (answer is null)
+                    throw new HttpRequestException("The AI relay process closed the connection without an answer.");
+                if (answer.Failure is not null)
+                    throw new HttpRequestException(answer.FailureMessage ?? answer.Failure);
+
+                var response = new HttpResponseMessage((HttpStatusCode)answer.Status)
+                {
+                    ReasonPhrase = answer.ReasonPhrase,
+                    RequestMessage = request,
+                    Content = new ByteArrayContent(answer.Body ?? []),
+                };
+                foreach (var header in answer.Headers)
+                {
+                    // The relay already read the whole body; framing headers would describe the
+                    // original connection, not this buffered copy.
+                    if (FramingHeaders.Contains(header.Name)) continue;
+                    if (!response.Headers.TryAddWithoutValidation(header.Name, header.Value))
+                        response.Content.Headers.TryAddWithoutValidation(header.Name, header.Value);
+                }
+
+                return response;
+            }
         }
-
-        LastRoute = "relay";
-        await using (pipe.ConfigureAwait(false))
+        finally
         {
-            var body = request.Content is null
-                ? null
-                : await request.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
-            var headers = request.Headers
-                .Concat(request.Content?.Headers ?? Enumerable.Empty<KeyValuePair<string, IEnumerable<string>>>())
-                .SelectMany(header => header.Value.Select(value => new AiRelayHeader(header.Key, value)))
-                .ToArray();
-            var outgoing = new AiRelayRequest(request.Method.Method, request.RequestUri!.AbsoluteUri, headers, body);
-            AiRelayResponse? answer;
-            // Closing the pipe is the cancel signal the relay listens for.
-            using (cancellationToken.Register(static state => ((Stream)state!).Dispose(), pipe))
-            {
-                try
-                {
-                    await AiRelayProtocol.WriteAsync(pipe, outgoing, cancellationToken).ConfigureAwait(false);
-                    answer = await AiRelayProtocol.ReadAsync<AiRelayResponse>(pipe, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception ex) when (cancellationToken.IsCancellationRequested &&
-                                           ex is IOException or ObjectDisposedException or OperationCanceledException)
-                {
-                    throw new OperationCanceledException(cancellationToken);
-                }
-                catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidDataException)
-                {
-                    throw new HttpRequestException($"The AI relay process stopped during the request: {ex.Message}", ex);
-                }
-            }
-
-            if (answer is null)
-                throw new HttpRequestException("The AI relay process closed the connection without an answer.");
-            if (answer.Failure is not null)
-                throw new HttpRequestException(answer.FailureMessage ?? answer.Failure);
-
-            var response = new HttpResponseMessage((HttpStatusCode)answer.Status)
-            {
-                ReasonPhrase = answer.ReasonPhrase,
-                RequestMessage = request,
-                Content = new ByteArrayContent(answer.Body ?? []),
-            };
-            foreach (var header in answer.Headers)
-            {
-                // The relay already read the whole body; framing headers would describe the
-                // original connection, not this buffered copy.
-                if (FramingHeaders.Contains(header.Name)) continue;
-                if (!response.Headers.TryAddWithoutValidation(header.Name, header.Value))
-                    response.Content.Headers.TryAddWithoutValidation(header.Name, header.Value);
-            }
-
-            return response;
+            current?.EndRequest();
         }
     }
 

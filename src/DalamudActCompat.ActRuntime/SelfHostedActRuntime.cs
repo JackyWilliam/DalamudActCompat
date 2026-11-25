@@ -74,7 +74,12 @@ public sealed class SelfHostedActRuntime : IDisposable
     private readonly object statisticsLifecycleLock = new();
     private readonly Func<IReadOnlyList<ActPlayerIdentity>> observedPlayerIdentities;
     private IReadOnlyList<ActPlayerIdentity> observedPlayerSnapshot = [];
+    private IReadOnlyList<ActPlayerIdentity>? lastObservedIdentitiesSource;
     private ObservedPlayerCache? observedPlayerCache;
+    private IReadOnlyList<ActPlayerIdentity>? lastDeathTrackedIdentities;
+    private ParserScope lastDeathTrackedScope;
+    private static MethodInfo? cachedResolveOverlayDispatcher;
+    private static MethodInfo? cachedCallOverlayHandler;
     // A live snapshot walks every combatant of the encounter, and a 48-player duty produces
     // several hundred combat actions per second. Rebuilding one per action kept the parser
     // thread inside the locks the game's frame thread takes every frame; alliance raids and
@@ -1607,25 +1612,26 @@ public sealed class SelfHostedActRuntime : IDisposable
                         "The real game-side OverlayPlugin dispatcher is not running.");
                 }
 
-                var dispatcherType = typeof(RainbowMage.OverlayPlugin.PluginMain)
-                                         .Assembly
-                                         .GetType(
-                                             "RainbowMage.OverlayPlugin.EventDispatcher",
-                                             throwOnError: true)!
-                                     ?? throw new TypeLoadException(
-                                         "RainbowMage.OverlayPlugin.EventDispatcher");
-                var resolve = container.GetType()
-                                  .GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                                  .Single(method =>
-                                      method.Name == "Resolve" &&
-                                      method.IsGenericMethodDefinition &&
-                                      method.GetGenericArguments().Length == 1 &&
-                                      method.GetParameters().Length == 0)
-                                  .MakeGenericMethod(dispatcherType);
-                var dispatcher = resolve.Invoke(container, null)
-                                 ?? throw new InvalidOperationException(
-                                     "OverlayPlugin EventDispatcher resolution returned null.");
-                var callHandler = dispatcherType.GetMethod(
+                var resolve = cachedResolveOverlayDispatcher;
+                var callHandler = cachedCallOverlayHandler;
+                if (resolve is null || callHandler is null)
+                {
+                    var dispatcherType = typeof(RainbowMage.OverlayPlugin.PluginMain)
+                                             .Assembly
+                                             .GetType(
+                                                 "RainbowMage.OverlayPlugin.EventDispatcher",
+                                                 throwOnError: true)!
+                                         ?? throw new TypeLoadException(
+                                             "RainbowMage.OverlayPlugin.EventDispatcher");
+                    resolve = container.GetType()
+                        .GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                        .Single(method =>
+                            method.Name == "Resolve" &&
+                            method.IsGenericMethodDefinition &&
+                            method.GetGenericArguments().Length == 1 &&
+                            method.GetParameters().Length == 0)
+                        .MakeGenericMethod(dispatcherType);
+                    callHandler = dispatcherType.GetMethod(
                                       "CallHandler",
                                       BindingFlags.Instance | BindingFlags.Public,
                                       binder: null,
@@ -1634,6 +1640,12 @@ public sealed class SelfHostedActRuntime : IDisposable
                                   ?? throw new MissingMethodException(
                                       dispatcherType.FullName,
                                       "CallHandler");
+                    cachedResolveOverlayDispatcher = resolve;
+                    cachedCallOverlayHandler = callHandler;
+                }
+                var dispatcher = resolve.Invoke(container, null)
+                                 ?? throw new InvalidOperationException(
+                                     "OverlayPlugin EventDispatcher resolution returned null.");
                 var response = callHandler.Invoke(dispatcher, [request]) as JToken;
                 var serialized = response?.ToString(Newtonsoft.Json.Formatting.None);
                 if (serialized is not null && Encoding.UTF8.GetByteCount(serialized) > 900_000)
@@ -1825,6 +1837,7 @@ public sealed class SelfHostedActRuntime : IDisposable
         }
 
         gameStateProvider.Clear();
+        lastObservedIdentitiesSource = null;
         Volatile.Write(ref observedPlayerSnapshot, []);
         lock (encounterSync)
         {
@@ -1849,6 +1862,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             lastRelevantCombatAction = default;
             transitionStateDirty = false;
             lastKnownDead.Clear();
+            lastDeathTrackedIdentities = null;
             observedDeaths.Clear();
             ResetChatEncounterUnsafe();
         }
@@ -2076,6 +2090,7 @@ public sealed class SelfHostedActRuntime : IDisposable
             if (activeEncounter is null)
             {
                 lastKnownDead.Clear();
+                lastDeathTrackedIdentities = null;
                 observedDeaths.Clear();
             }
             chatEncounterId = Guid.NewGuid();
@@ -2145,7 +2160,14 @@ public sealed class SelfHostedActRuntime : IDisposable
     internal void UpdateFrameworkState(DateTimeOffset? frameTime)
     {
         var identities = playerIdentities();
-        Volatile.Write(ref observedPlayerSnapshot, observedPlayerIdentities().ToArray());
+        var observed = observedPlayerIdentities();
+        if (!ReferenceEquals(observed, lastObservedIdentitiesSource))
+        {
+            Volatile.Write(
+                ref observedPlayerSnapshot,
+                observed.Count == 0 ? [] : observed.ToArray());
+            lastObservedIdentitiesSource = observed;
+        }
         var gameState = encounterModeSnapshot();
         var inCombat = gameState.InCombat;
         var combatChanged = frameworkInCombat != inCombat;
@@ -2162,6 +2184,8 @@ public sealed class SelfHostedActRuntime : IDisposable
             inCombat);
         // Auto and the supplemental paths use the same current roster. ACT only
         // receives a native mode (0..3), including on joins, leaves and restores.
+        // Sent every frame on purpose: the wrapper already returns early when the
+        // mode is unchanged, and resending undoes any write made behind our back.
         parser?.SetParseFilterMode((FFXIV_ACT_Plugin.Config.ParseFilterMode)
             ParserScopePolicy.ResolveEffectiveScope(getParserScope(), identities));
         TrackPlayerDeaths(identities);
@@ -2213,6 +2237,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         identities);
                     ResetChatEncounterUnsafe();
                     lastKnownDead.Clear();
+                    lastDeathTrackedIdentities = null;
                     observedDeaths.Clear();
                 }
             }
@@ -2675,6 +2700,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         if (!continuesChatEncounter)
                         {
                             lastKnownDead.Clear();
+                            lastDeathTrackedIdentities = null;
                             observedDeaths.Clear();
                         }
                     }
@@ -2879,6 +2905,7 @@ public sealed class SelfHostedActRuntime : IDisposable
                         livePublishPending = false;
                         nextLivePublishAt = default;
                         lastKnownDead.Clear();
+                        lastDeathTrackedIdentities = null;
                         observedDeaths.Clear();
                         ResetChatEncounterUnsafe();
                     }
@@ -3469,10 +3496,20 @@ public sealed class SelfHostedActRuntime : IDisposable
                 return;
             }
 
+            var scope = getParserScope();
+            if (ReferenceEquals(identities, lastDeathTrackedIdentities) &&
+                scope == lastDeathTrackedScope)
+            {
+                return;
+            }
+
+            lastDeathTrackedIdentities = identities;
+            lastDeathTrackedScope = scope;
+
             var changed = false;
             foreach (var identity in identities)
             {
-                if (!ParserScopePolicy.Includes(getParserScope(), identity, identities)) continue;
+                if (!ParserScopePolicy.Includes(scope, identity, identities)) continue;
                 var name = identity.DisplayName;
                 if (!lastKnownDead.TryGetValue(name, out var wasDead))
                 {

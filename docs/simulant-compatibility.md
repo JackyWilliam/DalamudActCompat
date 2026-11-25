@@ -95,8 +95,8 @@ v0.1.0.0 要求邮差 1.3.6.7：检查程序集版本，并反射读取 `State` 
 
 ```powershell
 $env:ACTCOMPAT_SIMULANT_DLL = '绝对路径\Simulant.dll'
-& 'tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.PackageSmokeTests.exe'
-& 'tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows10.0.17763.0/DalamudActCompat.HostSmokeTests.exe' `
+& 'tests/DalamudActCompat.PackageSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.PackageSmokeTests.exe'
+& 'tests/DalamudActCompat.HostSmokeTests/bin/Release/net10.0-windows/DalamudActCompat.HostSmokeTests.exe' `
   --simulant $env:ACTCOMPAT_SIMULANT_DLL 'vendor/BundledActPlugins'
 ```
 

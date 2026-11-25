@@ -162,9 +162,28 @@ public sealed class MeterWindowProfile
         }
 
         var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var slot in slots)
+        var seenMetrics = new HashSet<MeterSlotMetric>();
+        var writeIndex = 0;
+        for (var readIndex = 0; readIndex < slots.Count; readIndex++)
         {
+            var slot = slots[readIndex];
+            if (slot is null || !seenMetrics.Add(slot.Metric))
+            {
+                changed = true;
+                continue;
+            }
+
             changed |= slot.Normalize(usedIds);
+            if (writeIndex != readIndex)
+            {
+                slots[writeIndex] = slot;
+            }
+            writeIndex++;
+        }
+
+        if (writeIndex < slots.Count)
+        {
+            slots.RemoveRange(writeIndex, slots.Count - writeIndex);
         }
 
         return changed;

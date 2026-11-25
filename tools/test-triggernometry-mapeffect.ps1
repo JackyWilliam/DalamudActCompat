@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $configuration = 'Release'
-$targetFramework = 'net10.0-windows10.0.17763.0'
+$targetFramework = 'net10.0-windows'
 $testProject = Join-Path $repoRoot 'tests\DalamudActCompat.HostSmokeTests\DalamudActCompat.HostSmokeTests.csproj'
 $testOutput = Join-Path $repoRoot "tests\DalamudActCompat.HostSmokeTests\bin\$configuration\$targetFramework"
 $testExecutable = Join-Path $testOutput 'DalamudActCompat.HostSmokeTests.exe'

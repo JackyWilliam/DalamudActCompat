@@ -34,6 +34,15 @@ public sealed partial class ControlCenterWindow
     // splash grows the flat logo instead.
     internal ISharedImmediateTexture? LogoLayers { get; set; }
 
+    // Keep the layered logo atlas warm in Dalamud's texture cache only while a future open
+    // will play the splash (or while it is playing), so the first frame never stalls on PNG
+    // decode and the 12 MB atlas is evicted ~2 s after a one-shot launch splash completes.
+    internal bool NeedsSplashLogoPreload =>
+        !DactMotion.Disabled &&
+        (configuration.SplashAnimation == SplashAnimationMode.EveryOpen ||
+         (configuration.SplashAnimation == SplashAnimationMode.FirstOpenPerLaunch && !splashPlayedThisSession) ||
+         SplashActive);
+
     // Cell order is the contract with logo-layers.js.
     private enum LogoLayer { OrbitBack, CardBack, CardMid, CardFront, Bar1, Bar2, Bar3, RingFront, StarGlow, Star }
 
@@ -46,6 +55,7 @@ public sealed partial class ControlCenterWindow
     private static readonly Vector2 StarCenter = new(416, 135);
     private static readonly (LogoLayer Layer, Vector2 Pivot, double Start)[] SplashCards =
         [(LogoLayer.CardBack, new(146, 251), .10), (LogoLayer.CardMid, new(230, 212), .18), (LogoLayer.CardFront, new(279, 284), .26)];
+    private static readonly string[] SplashWordLetters = ["D", "A", "C", "T"];
     private static readonly (LogoLayer Layer, float Left, float Top, float Right, double Start)[] SplashBars =
         [(LogoLayer.Bar1, 223, 281, 263, .62), (LogoLayer.Bar2, 274, 249, 314, .69), (LogoLayer.Bar3, 325, 215, 366, .76)];
     private const float SplashBarBottom = 336;
@@ -145,8 +155,9 @@ public sealed partial class ControlCenterWindow
         // Child windows draw after the parent, so the overlay uses the foreground list, clipped to us.
         var draw = ImGui.GetForegroundDrawList();
         draw.PushClipRect(min, max, true);
+        var windowAlpha = ImGui.GetStyle().Alpha;
         var fly = EaseInOutCubic(Phase(t, SplashFlyAt, .36));
-        var backdrop = 1 - Phase(t, SplashFlyAt, .4);
+        var backdrop = (1 - Phase(t, SplashFlyAt, .4)) * windowAlpha;
         if (backdrop > 0) draw.AddRectFilled(min, max, DactUi.U32(palette.Surface with { W = backdrop }), ImGui.GetStyle().WindowRounding);
 
         var center = (min + max) * .5f - new Vector2(0, 24 * s);
@@ -154,6 +165,7 @@ public sealed partial class ControlCenterWindow
         var swell = MathF.Sin(Phase(t, .85, .6) * MathF.PI);
         var glow = (.35f + .3f * swell) * Phase(t, 0, .3) * backdrop;
         // Many faint discs instead of a few strong ones keep the falloff free of visible bands.
+        // The splash plays for two seconds once per launch, so the overdraw is not worth halving.
         for (var ring = 0; ring < 24; ring++)
         {
             var radius = (170 - ring * 7) * s * (1 + .06f * swell);
@@ -172,13 +184,13 @@ public sealed partial class ControlCenterWindow
                 size = baseSize + (target.Size - baseSize) * fly;
                 logoMin = Vector2.Lerp(logoMin, target.Min, fly);
             }
-            var alpha = target.Size > 0 ? 1 : backdrop;
+            var alpha = (target.Size > 0 ? 1 : backdrop) * windowAlpha;
             draw.AddImage(logoTexture.GetWrapOrEmpty().Handle, logoMin, logoMin + new Vector2(size), Vector2.Zero, Vector2.One,
                 DactUi.U32(new Vector4(1, 1, 1, alpha)));
         }
         else if (splashLayered && layers is not null)
         {
-            DrawLogoAssembly(draw, layers.Handle, logoMin, baseSize, t);
+            DrawLogoAssembly(draw, layers.Handle, logoMin, baseSize, t, windowAlpha);
         }
         else
         {
@@ -188,24 +200,30 @@ public sealed partial class ControlCenterWindow
             var flatMin = center - new Vector2(size * .5f);
             if (grow > 0)
                 draw.AddImage(logoTexture.GetWrapOrEmpty().Handle, flatMin, flatMin + new Vector2(size), Vector2.Zero, Vector2.One,
-                    DactUi.U32(new Vector4(1, 1, 1, grow)));
+                    DactUi.U32(new Vector4(1, 1, 1, grow * windowAlpha)));
             DrawStarFlare(draw, logoMin + StarCenter * (baseSize / 512), baseSize / 512, Phase(t, .95, .3));
         }
 
         // D A C T: each letter 60 ms after the previous, spacing 18 → 6, gone as the logo flies.
-        const string word = "DACT";
         var spacing = (18 - 12 * EaseInOutCubic(Phase(t, 1.0, .35))) * s;
         var fontSize = 30 * s;
         var font = ImGui.GetFont();
-        var widths = word.Select(letter => ImGui.CalcTextSize(letter.ToString()).X * fontSize / ImGui.GetFontSize()).ToArray();
-        var total = widths.Sum() + spacing * (word.Length - 1);
+        var fontScale = fontSize / ImGui.GetFontSize();
+        Span<float> widths = stackalloc float[SplashWordLetters.Length];
+        var total = spacing * (SplashWordLetters.Length - 1);
+        for (var index = 0; index < SplashWordLetters.Length; index++)
+        {
+            var letterWidth = ImGui.CalcTextSize(SplashWordLetters[index]).X * fontScale;
+            widths[index] = letterWidth;
+            total += letterWidth;
+        }
         var x = center.X - total * .5f;
         var letterY = center.Y + baseSize * .5f + 18 * s;
-        for (var index = 0; index < word.Length; index++)
+        for (var index = 0; index < SplashWordLetters.Length; index++)
         {
-            var alpha = Phase(t, 1.0 + index * .06, .18) * (1 - Phase(t, SplashFlyAt, .15));
+            var alpha = Phase(t, 1.0 + index * .06, .18) * (1 - Phase(t, SplashFlyAt, .15)) * windowAlpha;
             if (alpha > 0)
-                draw.AddText(font, fontSize, new Vector2(x, letterY + (1 - alpha) * 6 * s), DactUi.U32(palette.Text with { W = alpha }), word[index].ToString());
+                draw.AddText(font, fontSize, new Vector2(x, letterY + (1 - alpha) * 6 * s), DactUi.U32(palette.Text with { W = alpha }), SplashWordLetters[index]);
             x += widths[index] + spacing;
         }
         draw.PopClipRect();
@@ -214,13 +232,13 @@ public sealed partial class ControlCenterWindow
     // Draws the logo parts at time t on the 512 canvas placed at origin with the given size.
     // Layer z-order follows the cells; the orbit's head is drawn behind the cards while it runs
     // along the back half and in front of them along the front half.
-    private static void DrawLogoAssembly(ImDrawListPtr draw, ImTextureID atlas, Vector2 origin, float size, double t)
+    private static void DrawLogoAssembly(ImDrawListPtr draw, ImTextureID atlas, Vector2 origin, float size, double t, float opacity)
     {
         var k = size / 512;
         Vector2 Screen(Vector2 canvas) => origin + canvas * k;
         static Vector2 Uv(LogoLayer layer, Vector2 canvas) =>
             new(((int)layer % 4 + canvas.X / 512) / 4, ((int)layer / 4 + canvas.Y / 512) / 3);
-        static uint White(float alpha) => DactUi.U32(new Vector4(1, 1, 1, alpha));
+        uint White(float alpha) => DactUi.U32(new Vector4(1, 1, 1, alpha * opacity));
         // Canvas rectangle [from, to] of a layer drawn at the canvas rectangle [destFrom, destTo].
         void Part(LogoLayer layer, Vector2 from, Vector2 to, Vector2 destFrom, Vector2 destTo, float alpha) =>
             draw.AddImage(atlas, Screen(destFrom), Screen(destTo), Uv(layer, from), Uv(layer, to), White(alpha));
@@ -248,6 +266,7 @@ public sealed partial class ControlCenterWindow
         }
         void Comet(float degrees, float strength)
         {
+            strength *= opacity;
             if (strength <= 0) return;
             // A tapering tail along the orbit, then a white core inside a lavender halo.
             for (var tail = 12; tail >= 1; tail--)

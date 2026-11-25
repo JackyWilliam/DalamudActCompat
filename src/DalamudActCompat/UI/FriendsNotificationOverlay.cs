@@ -9,18 +9,36 @@ namespace DalamudActCompat.UI;
 internal sealed partial class FriendsUiManager
 {
     private const string NotificationPrefix = "##DACTIncoming-";
+    private static ReadOnlySpan<byte> NotificationPrefixUtf8 => "##DACTIncoming-"u8;
     private static readonly ImGuiWindowFlags NotificationFlags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove |
         ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoNav |
         ImGuiWindowFlags.NoBringToFrontOnFocus | ImGuiWindowFlags.NoBackground;
 
     private sealed record IncomingLayout(FriendIncomingNotification Entry, string Body, float Height);
 
+    private static unsafe bool IsNotificationWindow(ImGuiWindowPtr window)
+    {
+        if (window.Handle == null || window.Name == null) return false;
+        var prefix = NotificationPrefixUtf8;
+        var ptr = (byte*)window.Name;
+        for (var i = 0; i < prefix.Length; i++)
+        {
+            if (ptr[i] != prefix[i]) return false;
+        }
+        return true;
+    }
+
+    private unsafe void TrackNonNotificationFocus()
+    {
+        var context = ImGui.GetCurrentContext();
+        if (context.NavWindow.Handle != null && !IsNotificationWindow(context.NavWindow))
+            lastNonNotificationFocus = context.NavWindow.ID;
+    }
+
     private unsafe void DrawIncomingNotifications(FriendsChatSnapshot state, long now)
     {
         var context = ImGui.GetCurrentContext();
-        bool IsNotification(ImGuiWindowPtr window) => window.Handle != null &&
-            (Marshal.PtrToStringUTF8((nint)window.Name)?.StartsWith(NotificationPrefix, StringComparison.Ordinal) ?? false);
-        if (context.NavWindow.Handle != null && !IsNotification(context.NavWindow)) lastNonNotificationFocus = context.NavWindow.ID;
+        if (context.NavWindow.Handle != null && !IsNotificationWindow(context.NavWindow)) lastNonNotificationFocus = context.NavWindow.ID;
         if (incoming.Visible.Count == 0) return;
         var viewport = ImGui.GetMainViewport();
         DactUi.BeginFrame();
@@ -111,7 +129,7 @@ internal sealed partial class FriendsUiManager
         }
         // Mouse buttons may focus an ImGui window even with NoNav. Only an
         // explicit OpenChat may focus chat; quick replies return to the prior owner.
-        if (IsNotification(context.NavWindow))
+        if (IsNotificationWindow(context.NavWindow))
         {
             ImGuiWindowPtr previous = default;
             for (var i = 0; i < context.Windows.Size; i++)
@@ -130,7 +148,7 @@ internal sealed partial class FriendsUiManager
             if (root.Handle != null) root.Flags = previousFlags;
             context.ActiveIdNoClearOnFocusLoss = preserveActive;
         }
-        if (context.ActiveId != 0 && IsNotification(context.ActiveIdWindow)) ImGui.SetNextFrameWantCaptureKeyboard(false);
+        if (context.ActiveId != 0 && IsNotificationWindow(context.ActiveIdWindow)) ImGui.SetNextFrameWantCaptureKeyboard(false);
     }
 
     private string? NotificationReplyStatus(FriendIncomingNotification entry, FriendsChatSnapshot state)

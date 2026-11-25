@@ -96,18 +96,26 @@ public sealed class RoleSplitMeterWindow : Window
         }
     }
 
+    private string? windowTitleLanguage;
+
     public override bool DrawConditions()
     {
-        WindowName = text.Get(
-            group == RoleSplitGroup.Healer
-                ? "治疗 HPS 榜###DalamudActCompatRoleSplitHealerMeter"
-                : "D / T 伤害榜###DalamudActCompatRoleSplitDamageMeter",
-            group == RoleSplitGroup.Healer
-                ? "Healer HPS###DalamudActCompatRoleSplitHealerMeter"
-                : "D / T Damage###DalamudActCompatRoleSplitDamageMeter");
         if (!configuration.Meter.IsVisible || !configuration.Meter.RoleSplitWindow.IsEnabled)
         {
             return false;
+        }
+
+        var lang = text.Language;
+        if (windowTitleLanguage != lang)
+        {
+            windowTitleLanguage = lang;
+            WindowName = text.Get(
+                group == RoleSplitGroup.Healer
+                    ? "治疗 HPS 榜###DalamudActCompatRoleSplitHealerMeter"
+                    : "D / T 伤害榜###DalamudActCompatRoleSplitDamageMeter",
+                group == RoleSplitGroup.Healer
+                    ? "Healer HPS###DalamudActCompatRoleSplitHealerMeter"
+                    : "D / T Damage###DalamudActCompatRoleSplitDamageMeter");
         }
 
         var now = Environment.TickCount64;

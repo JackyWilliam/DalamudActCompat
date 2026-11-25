@@ -48,6 +48,7 @@ internal sealed class HtmlOverlayHotkeyService : IDisposable
         lock (lifetime)
         {
             if (disposed != 0) return;
+            if (BindingsMatch(bindings, next)) return;
             window.Invoke(() =>
             {
                 Interlocked.Increment(ref generation);
@@ -55,6 +56,24 @@ internal sealed class HtmlOverlayHotkeyService : IDisposable
                 RegisterCurrent();
             });
         }
+    }
+
+    private static bool BindingsMatch(Binding[] left, Binding[] right)
+    {
+        if (left.Length != right.Length) return false;
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (left[i].Settings.Status == OverlayHotkeyStatus.Unavailable ||
+                !ReferenceEquals(left[i].Settings, right[i].Settings) ||
+                left[i].Chord != right[i].Chord ||
+                left[i].Enabled != right[i].Enabled ||
+                left[i].Action != right[i].Action ||
+                !string.Equals(left[i].Overlay, right[i].Overlay, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     internal void Suspend(bool value)

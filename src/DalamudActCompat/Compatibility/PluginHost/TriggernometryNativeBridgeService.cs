@@ -96,33 +96,64 @@ internal sealed class TriggernometryNativeBridgeService : IDisposable
             return;
         }
 
-        nint[] removals;
+        nint[]? removals = null;
         lock (syncRoot)
         {
-            if (actorVfx is not null)
+            if (lockOns.Count == 0 && pendingRemovals.Count == 0)
             {
-                foreach (var stale in lockOns.Keys
-                             .Where(handle => !actorVfx.IsActive(handle))
-                             .ToArray())
+                return;
+            }
+
+            if (actorVfx is not null && lockOns.Count > 0)
+            {
+                List<nint>? staleHandles = null;
+                foreach (var handle in lockOns.Keys)
                 {
-                    lockOns.Remove(stale);
+                    if (!actorVfx.IsActive(handle))
+                    {
+                        (staleHandles ??= []).Add(handle);
+                    }
+                }
+                if (staleHandles is not null)
+                {
+                    foreach (var stale in staleHandles)
+                    {
+                        lockOns.Remove(stale);
+                    }
                 }
             }
 
-            foreach (var expired in lockOns
-                         .Where(pair => pair.Value is { } expiresAt && expiresAt <= now)
-                         .Select(static pair => pair.Key)
-                         .ToArray())
+            if (lockOns.Count > 0)
             {
-                pendingRemovals.Add(expired);
-                lockOns.Remove(expired);
+                List<nint>? expiredHandles = null;
+                foreach (var pair in lockOns)
+                {
+                    if (pair.Value is { } expiresAt && expiresAt <= now)
+                    {
+                        (expiredHandles ??= []).Add(pair.Key);
+                    }
+                }
+                if (expiredHandles is not null)
+                {
+                    foreach (var expired in expiredHandles)
+                    {
+                        pendingRemovals.Add(expired);
+                        lockOns.Remove(expired);
+                    }
+                }
             }
 
-            removals = pendingRemovals.Distinct().ToArray();
-            pendingRemovals.Clear();
+            if (pendingRemovals.Count > 0)
+            {
+                removals = pendingRemovals.Distinct().ToArray();
+                pendingRemovals.Clear();
+            }
         }
 
-        RemoveHandles(removals);
+        if (removals is not null)
+        {
+            RemoveHandles(removals);
+        }
     }
 
     internal void Clear()

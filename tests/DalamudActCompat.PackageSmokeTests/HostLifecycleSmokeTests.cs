@@ -164,7 +164,7 @@ internal static class HostLifecycleSmokeTests
         currentDirectory = Path.Combine(root, "new-plugin-directory");
         var plugin = Path.Combine(currentDirectory, "community.lifecycle"); Directory.CreateDirectory(plugin);
         var fixture = Path.Combine(repository.FullName, "tests", "DalamudActCompat.HostSmokeTests", "bin", "Release",
-            "net10.0-windows10.0.17763.0", "DalamudActCompat.HostSmokeTests.dll");
+            "net10.0-windows", "DalamudActCompat.HostSmokeTests.dll");
         File.Copy(fixture, Path.Combine(plugin, "fixture.dll"));
         File.WriteAllText(Path.Combine(plugin, "actcompat.plugin.json"), JsonSerializer.Serialize(new
             { Id = "community.lifecycle", EntryAssembly = "fixture.dll", EntryType = "GenericActPluginHostFixture" }));

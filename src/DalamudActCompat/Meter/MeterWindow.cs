@@ -69,6 +69,66 @@ public sealed class MeterWindow : Window
     private bool classicListScrollsHorizontally;
     private bool locateOnNextDraw;
     private long locatePreviewExpiresAt;
+    private string? windowTitleLanguage;
+    private IReadOnlyList<CombatantRow>? cachedClassicSourceRows;
+    private bool cachedClassicCompact;
+    private bool cachedClassicAlliance;
+    private bool cachedClassicFollowsParserScope;
+    private MeterSortMode cachedClassicSortMode;
+    private DpsMetric cachedClassicDpsSortMetric;
+    private IReadOnlyList<CombatantRow>? cachedClassicSelectedRows;
+    private IReadOnlyList<CombatantRow>? cachedWidthsRows;
+    private float cachedWidthsFontScale;
+    private float cachedWidthsFontSize;
+    private string? cachedWidthsLanguage;
+    private int cachedWidthsMask;
+    private MeterColumnWidths? cachedWidths;
+    private Encounter? cachedCombatantLookupEncounter;
+    private readonly Dictionary<string, Combatant> cachedCombatantsById = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<CombatantRow, FormattedRowStrings>
+        RowDisplayCache = new();
+
+    private sealed class FormattedRowStrings(CombatantRow row)
+    {
+        public readonly string ButtonId = $"meter-row-{row.Id}-{row.Name}";
+        public readonly string Rank = row.Rank is { } rank ? rank.ToString() : "--";
+        public readonly string IdentityMeasure = $"{row.Job}  {row.Name}";
+        public readonly string Deaths = row.Deaths.ToString();
+        public readonly string DamagePercent = $"{row.DamagePercent:N1}%";
+        public readonly string TotalDamage = FormatCompactNumber(row.TotalDamage);
+        public readonly string TotalHealing = FormatCompactNumber(row.TotalHealing);
+        public readonly string CriticalHit = FormatHitRateValue(row.CriticalHitPercent);
+        public readonly string DirectHit = FormatHitRateValue(row.DirectHitPercent);
+        public readonly string CriticalDirectHit = FormatHitRateValue(row.CriticalDirectHitPercent);
+        public readonly string Hps = $"{row.Hps:N0}";
+        public readonly string PersonalDps = $"{row.PersonalDps:N0}";
+        public readonly string Rdps = $"{row.Rdps:N0}";
+        public readonly string EncDps = $"{row.EncDps:N0}";
+        public readonly string ExtDps = $"{row.ExtDps:N0}";
+    }
+
+    private static FormattedRowStrings GetFormattedRow(CombatantRow row)
+        => RowDisplayCache.GetValue(row, static r => new FormattedRowStrings(r));
+
+    private Combatant? ResolveEncounterCombatant(Encounter encounter, string combatantId)
+    {
+        if (!ReferenceEquals(cachedCombatantLookupEncounter, encounter))
+        {
+            cachedCombatantsById.Clear();
+            foreach (var item in encounter.Combatants)
+            {
+                if (!string.IsNullOrEmpty(item.Id))
+                {
+                    cachedCombatantsById.TryAdd(item.Id, item);
+                }
+            }
+            cachedCombatantLookupEncounter = encounter;
+        }
+
+        return string.IsNullOrEmpty(combatantId)
+            ? null
+            : cachedCombatantsById.GetValueOrDefault(combatantId);
+    }
 
     public MeterWindow(
         MeterService meterService,
@@ -108,10 +168,16 @@ public sealed class MeterWindow : Window
     public override bool DrawConditions()
     {
         var settings = configuration.Meter;
-        WindowName = text.Get("战斗统计###DalamudActCompatMeter", "Combat Meter###DalamudActCompatMeter");
         if (!settings.IsVisible || !settings.ClassicWindow.IsEnabled)
         {
             return false;
+        }
+
+        var lang = text.Language;
+        if (windowTitleLanguage != lang)
+        {
+            windowTitleLanguage = lang;
+            WindowName = text.Get("战斗统计###DalamudActCompatMeter", "Combat Meter###DalamudActCompatMeter");
         }
 
         var now = Environment.TickCount64;
@@ -230,7 +296,7 @@ public sealed class MeterWindow : Window
             DrawCompactDragHandle(settings);
         }
 
-        var rows = SelectClassicRows(allRows, settings);
+        var rows = SelectClassicRowsCached(allRows, settings);
         ApplyCompactWindowHeight(settings);
         if (rows.Count == 0)
         {
@@ -899,6 +965,38 @@ public sealed class MeterWindow : Window
             fallbackGlyph);
     }
 
+    private IReadOnlyList<CombatantRow> SelectClassicRowsCached(
+        IReadOnlyList<CombatantRow> allRows,
+        MeterSettings settings)
+    {
+        var compact = settings.EffectiveClassicCompact;
+        var alliance = settings.ClassicAllianceView;
+        var followsScope = settings.FollowsParserScope;
+        var sortMode = settings.ClassicWindow.SortMode;
+        var dpsSortMetric = settings.ClassicWindow.DpsSortMetric;
+
+        if (cachedClassicSelectedRows is not null &&
+            ReferenceEquals(cachedClassicSourceRows, allRows) &&
+            cachedClassicCompact == compact &&
+            cachedClassicAlliance == alliance &&
+            cachedClassicFollowsParserScope == followsScope &&
+            cachedClassicSortMode == sortMode &&
+            cachedClassicDpsSortMetric == dpsSortMetric)
+        {
+            return cachedClassicSelectedRows;
+        }
+
+        var selected = SelectClassicRows(allRows, settings);
+        cachedClassicSourceRows = allRows;
+        cachedClassicCompact = compact;
+        cachedClassicAlliance = alliance;
+        cachedClassicFollowsParserScope = followsScope;
+        cachedClassicSortMode = sortMode;
+        cachedClassicDpsSortMetric = dpsSortMetric;
+        cachedClassicSelectedRows = selected;
+        return selected;
+    }
+
     private static IReadOnlyList<CombatantRow> SelectClassicRows(
         IReadOnlyList<CombatantRow> rows,
         MeterSettings settings,
@@ -1268,6 +1366,35 @@ public sealed class MeterWindow : Window
         bool showFflogs)
     {
         var scale = Math.Clamp(settings.FontScale, 0.75f, 1.8f);
+        var fontSize = ImGui.GetFontSize();
+        var lang = text.Language;
+        var mask =
+            (showFflogs ? 1 << 0 : 0) |
+            (settings.ShowRank ? 1 << 1 : 0) |
+            (settings.ShowPlayerName ? 1 << 2 : 0) |
+            (settings.ShowJob ? 1 << 3 : 0) |
+            (settings.ShowDps ? 1 << 4 : 0) |
+            (settings.ShowRdps ? 1 << 5 : 0) |
+            (settings.ShowEncDps ? 1 << 6 : 0) |
+            (settings.ShowExtDps ? 1 << 7 : 0) |
+            (settings.ShowHps ? 1 << 8 : 0) |
+            (settings.ShowCriticalHitRate ? 1 << 9 : 0) |
+            (settings.ShowDirectHitRate ? 1 << 10 : 0) |
+            (settings.ShowCriticalDirectHitRate ? 1 << 11 : 0) |
+            (settings.ShowDamagePercent ? 1 << 12 : 0) |
+            (settings.ShowHighestDamage ? 1 << 13 : 0) |
+            (settings.ShowDeaths ? 1 << 14 : 0);
+
+        if (cachedWidths is not null &&
+            ReferenceEquals(cachedWidthsRows, rows) &&
+            cachedWidthsMask == mask &&
+            cachedWidthsFontScale == scale &&
+            cachedWidthsFontSize == fontSize &&
+            cachedWidthsLanguage == lang)
+        {
+            return cachedWidths;
+        }
+
         float StableWidth(float nominalWidth, string header, IEnumerable<string> values)
             => ResolveStableColumnWidth(
                 nominalWidth,
@@ -1277,9 +1404,9 @@ public sealed class MeterWindow : Window
                     .DefaultIfEmpty(0)
                     .Max());
 
-        return new MeterColumnWidths(
+        var measured = new MeterColumnWidths(
             settings.ShowRank
-                ? StableWidth(RankColumnWidth, "#", rows.Select(static row => row.Rank?.ToString() ?? "--"))
+                ? StableWidth(RankColumnWidth, "#", rows.Select(static row => GetFormattedRow(row).Rank))
                 : null,
             settings.ShowPlayerName || settings.ShowJob
                 ? Math.Min(
@@ -1287,7 +1414,7 @@ public sealed class MeterWindow : Window
                     StableWidth(
                         IdentityColumnWidth,
                         text.Get("职业 / ID", "Job / ID"),
-                        rows.Select(static row => $"{row.Job}  {row.Name}")))
+                        rows.Select(static row => GetFormattedRow(row).IdentityMeasure)))
                 : null,
             showFflogs
                 ? StableWidth(FflogsColumnWidth, "FFLogs", ["100", "--"])
@@ -1296,52 +1423,52 @@ public sealed class MeterWindow : Window
                 ? StableWidth(
                     RateColumnWidth,
                     "DPS",
-                    rows.Select(static row => $"{row.PersonalDps:N0}"))
+                    rows.Select(static row => GetFormattedRow(row).PersonalDps))
                 : null,
             settings.ShowRdps
                 ? StableWidth(
                     RateColumnWidth,
                     "rDPS",
-                    rows.Select(static row => $"{row.Rdps:N0}"))
+                    rows.Select(static row => GetFormattedRow(row).Rdps))
                 : null,
             settings.ShowEncDps
                 ? StableWidth(
                     RateColumnWidth,
                     "EncDPS",
-                    rows.Select(static row => $"{row.EncDps:N0}"))
+                    rows.Select(static row => GetFormattedRow(row).EncDps))
                 : null,
             settings.ShowExtDps
                 ? StableWidth(
                     RateColumnWidth,
                     "ExtDPS",
-                    rows.Select(static row => $"{row.ExtDps:N0}"))
+                    rows.Select(static row => GetFormattedRow(row).ExtDps))
                 : null,
             settings.ShowHps
-                ? StableWidth(RateColumnWidth, "HPS", rows.Select(static row => $"{row.Hps:N0}"))
+                ? StableWidth(RateColumnWidth, "HPS", rows.Select(static row => GetFormattedRow(row).Hps))
                 : null,
             settings.ShowCriticalHitRate
                 ? StableWidth(
                     HitRateColumnWidth,
                     text.Get("暴击", "CRIT"),
-                    rows.Select(static row => FormatHitRateValue(row.CriticalHitPercent)))
+                    rows.Select(static row => GetFormattedRow(row).CriticalHit))
                 : null,
             settings.ShowDirectHitRate
                 ? StableWidth(
                     HitRateColumnWidth,
                     text.Get("直击", "DH"),
-                    rows.Select(static row => FormatHitRateValue(row.DirectHitPercent)))
+                    rows.Select(static row => GetFormattedRow(row).DirectHit))
                 : null,
             settings.ShowCriticalDirectHitRate
                 ? StableWidth(
                     HitRateColumnWidth,
                     text.Get("直暴", "CDH"),
-                    rows.Select(static row => FormatHitRateValue(row.CriticalDirectHitPercent)))
+                    rows.Select(static row => GetFormattedRow(row).CriticalDirectHit))
                 : null,
             settings.ShowDamagePercent
                 ? StableWidth(
                     DamagePercentColumnWidth,
                     text.Get("占比", "DMG%"),
-                    rows.Select(static row => $"{row.DamagePercent:N1}%"))
+                    rows.Select(static row => GetFormattedRow(row).DamagePercent))
                 : null,
             null,
             null,
@@ -1357,8 +1484,16 @@ public sealed class MeterWindow : Window
                 ? StableWidth(
                     DeathsColumnWidth,
                     text.Get("死亡", "KO"),
-                    rows.Select(static row => row.Deaths.ToString()))
+                    rows.Select(static row => GetFormattedRow(row).Deaths))
                 : null);
+
+        cachedWidthsRows = rows;
+        cachedWidthsMask = mask;
+        cachedWidthsFontScale = scale;
+        cachedWidthsFontSize = fontSize;
+        cachedWidthsLanguage = lang;
+        cachedWidths = measured;
+        return measured;
     }
 
     private float MeasureMinimumIdentityColumnWidth(MeterSettings settings)
@@ -1532,11 +1667,12 @@ public sealed class MeterWindow : Window
         FflogsEstimate? estimate,
         MeterPreviewInteraction? previewInteraction)
     {
+        var formatted = GetFormattedRow(row);
         var rowHeight = CalculateCombatantRowHeight(ImGui.GetTextLineHeightWithSpacing());
         var width = ImGui.GetContentRegionAvail().X;
         var start = ImGui.GetCursorScreenPos();
         var end = start + new Vector2(width, rowHeight);
-        ImGui.InvisibleButton($"meter-row-{row.Id}-{row.Name}", new Vector2(width, rowHeight));
+        ImGui.InvisibleButton(formatted.ButtonId, new Vector2(width, rowHeight));
 
         var drawList = ImGui.GetWindowDrawList();
         var hovered = ImGui.IsItemHovered();
@@ -1577,8 +1713,7 @@ public sealed class MeterWindow : Window
         }
 
         var isLimitBreak = MeterService.IsLimitBreak(row.Id, row.Name);
-        var combatant = encounter.Combatants.FirstOrDefault(item =>
-            string.Equals(item.Id, row.Id, StringComparison.OrdinalIgnoreCase));
+        var combatant = ResolveEncounterCombatant(encounter, row.Id);
         var displayName = isLimitBreak
             ? LimitBreakDisplayName
             : combatant is null
@@ -1714,7 +1849,7 @@ public sealed class MeterWindow : Window
         if (layout.Rank is { } rankColumn)
         {
             DrawColumn(
-                row.Rank is { } rank ? rank.ToString() : "--",
+                formatted.Rank,
                 rankColumn,
                 new Vector4(0.68f, 0.71f, 0.76f, 1));
         }
@@ -1750,26 +1885,26 @@ public sealed class MeterWindow : Window
 
         if (layout.Deaths is { } deaths)
         {
-            DrawColumn(row.Deaths.ToString(), deaths, new Vector4(0.78f, 0.80f, 0.84f, 1));
+            DrawColumn(formatted.Deaths, deaths, new Vector4(0.78f, 0.80f, 0.84f, 1));
         }
         if (layout.DamagePercent is { } damagePercent)
         {
             DrawColumn(
-                $"{row.DamagePercent:N1}%",
+                formatted.DamagePercent,
                 damagePercent,
                 new Vector4(0.72f, 0.78f, 0.84f, 1));
         }
         if (layout.TotalDamage is { } totalDamage)
         {
             DrawColumn(
-                FormatCompactNumber(row.TotalDamage),
+                formatted.TotalDamage,
                 totalDamage,
                 new Vector4(0.86f, 0.78f, 0.58f, 1));
         }
         if (layout.TotalHealing is { } totalHealing)
         {
             DrawColumn(
-                FormatCompactNumber(row.TotalHealing),
+                formatted.TotalHealing,
                 totalHealing,
                 new Vector4(0.48f, 0.84f, 0.62f, 1));
         }
@@ -1789,43 +1924,43 @@ public sealed class MeterWindow : Window
         if (layout.CriticalHit is { } criticalHit)
         {
             DrawColumn(
-                FormatHitRateValue(row.CriticalHitPercent),
+                formatted.CriticalHit,
                 criticalHit,
                 new Vector4(0.82f, 0.68f, 0.92f, 1));
         }
         if (layout.DirectHit is { } directHit)
         {
             DrawColumn(
-                FormatHitRateValue(row.DirectHitPercent),
+                formatted.DirectHit,
                 directHit,
                 new Vector4(0.52f, 0.78f, 0.92f, 1));
         }
         if (layout.CriticalDirectHit is { } criticalDirectHit)
         {
             DrawColumn(
-                FormatHitRateValue(row.CriticalDirectHitPercent),
+                formatted.CriticalDirectHit,
                 criticalDirectHit,
                 new Vector4(0.95f, 0.62f, 0.45f, 1));
         }
         if (layout.Hps is { } hps)
         {
-            DrawColumn($"{row.Hps:N0}", hps, new Vector4(0.48f, 0.84f, 0.62f, 1));
+            DrawColumn(formatted.Hps, hps, new Vector4(0.48f, 0.84f, 0.62f, 1));
         }
         if (layout.Dps is { } dps)
         {
-            DrawColumn($"{row.PersonalDps:N0}", dps, PrimaryRateColor(row.IsLocalPlayer));
+            DrawColumn(formatted.PersonalDps, dps, PrimaryRateColor(row.IsLocalPlayer));
         }
         if (layout.Rdps is { } rdps)
         {
-            DrawColumn($"{row.Rdps:N0}", rdps, PrimaryRateColor(row.IsLocalPlayer));
+            DrawColumn(formatted.Rdps, rdps, PrimaryRateColor(row.IsLocalPlayer));
         }
         if (layout.EncDps is { } encDps)
         {
-            DrawColumn($"{row.EncDps:N0}", encDps, PrimaryRateColor(row.IsLocalPlayer));
+            DrawColumn(formatted.EncDps, encDps, PrimaryRateColor(row.IsLocalPlayer));
         }
         if (layout.ExtDps is { } extDps)
         {
-            DrawColumn($"{row.ExtDps:N0}", extDps, PrimaryRateColor(row.IsLocalPlayer));
+            DrawColumn(formatted.ExtDps, extDps, PrimaryRateColor(row.IsLocalPlayer));
         }
         if (layout.Fflogs is { } fflogsColumn)
         {

@@ -10,7 +10,6 @@ namespace DalamudActCompat.UI;
 // logo / slogan, as the user redrew it in Figma) and the form panel on the right.
 public sealed partial class ControlCenterWindow
 {
-    private bool cloudShowPassword;
     private bool cloudResetPasswordStep;
     private bool authLegacyOpen;
     private bool authOtherRecoveryOpen;
@@ -201,7 +200,6 @@ public sealed partial class ControlCenterWindow
         {
             cloud.Login(new(cloudUsername, cloudPassword, cloudRecoveryKey, cloudRememberLogin));
             cloudPassword = cloudRecoveryKey = string.Empty;
-            cloudShowPassword = false;
         }
         // Said before the name leaves the PC: it is new data the server did not receive before.
         DactUi.Hint(text.Get("登录时会把这台电脑的名称发给 DACT 服务器，只用于在你的账号里区分设备；每个账号最多同时登录 5 台。",

@@ -67,10 +67,11 @@ public sealed class ActHostSupervisor : IAsyncDisposable
         bool enableMemoryProtection = false,
         string? packagedHostDirectory = null,
         Func<string>? pluginDirectoryProvider = null,
-        HostEntityEpochClock? entityEpochClock = null)
+        HostEntityEpochClock? entityEpochClock = null,
+        string? sharedAssemblyDirectory = null)
     {
         this.entityEpochClock = entityEpochClock;
-        assets = new CompatibilityHostAssets(hostDirectory, logger, packagedHostDirectory);
+        assets = new CompatibilityHostAssets(hostDirectory, logger, packagedHostDirectory, sharedAssemblyDirectory);
         process = new CompatibilityHostProcess(logger);
         this.ipc = ipc;
         this.logger = logger;
