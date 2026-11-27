@@ -70,6 +70,24 @@ internal static class SimulantEntryPointCompatibility
         return bytes;
     }
 
+    internal static byte[] ReadStandaloneMemory(IntPtr address, int count)
+    {
+        var assembly = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "Simulant");
+        var connection = assembly.GetType("Simulant.Game.GameInterop")!
+                             .GetProperty("Connection", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)!
+                             .GetValue(null)
+                         ?? throw new InvalidOperationException("Simulant 尚未连接游戏进程。");
+        var memory = connection.GetType()
+                         .GetProperty("Memory", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!
+                         .GetValue(connection)
+                     ?? throw new InvalidOperationException("Simulant 游戏内存连接尚未就绪。");
+        var readBytes = memory.GetType().GetMethod("ReadBytes", [typeof(IntPtr), typeof(int)])
+                        ?? throw new MissingMethodException(memory.GetType().FullName, "ReadBytes");
+        var bytes = (byte[]?)readBytes.Invoke(memory, [address, count]);
+        if (bytes is null || bytes.Length != count) throw new IOException("未能完整读取游戏函数。");
+        return bytes;
+    }
+
     internal static void ValidateImageHeaders(ReadOnlySpan<byte> disk, ReadOnlySpan<byte> live, IntPtr moduleBase)
     {
         if (disk.Length < 64 || disk.Length != live.Length) throw new InvalidDataException("游戏 PE 头长度不一致。");

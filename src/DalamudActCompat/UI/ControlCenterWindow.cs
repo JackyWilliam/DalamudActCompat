@@ -172,7 +172,7 @@ public sealed partial class ControlCenterWindow : Window
     private bool visibilityStylePushed;
     private long resetEncounterConfirmationExpiresAt;
     private string? factoryResetResult;
-    private string? openedGenericPermissionKey;
+    private ThirdPartyPluginInstallStatus? openedGenericPermissionStatus;
     private ThirdPartyPluginInstallStatus? openedPluginFailureStatus;
     private bool pluginFailureLogCopied;
     private string? genericPluginToDeleteId;
@@ -1497,7 +1497,7 @@ public sealed partial class ControlCenterWindow : Window
 
         if (status.State == ThirdPartyPluginInstallState.Failed)
         {
-            openedGenericPermissionKey = null;
+            openedGenericPermissionStatus = null;
             if (!ReferenceEquals(openedPluginFailureStatus, status))
             {
                 openedPluginFailureStatus = status;
@@ -1517,17 +1517,13 @@ public sealed partial class ControlCenterWindow : Window
         pluginFailureLogCopied = false;
         if (status.State != ThirdPartyPluginInstallState.AwaitingPermission)
         {
-            openedGenericPermissionKey = null;
+            openedGenericPermissionStatus = null;
             return;
         }
 
-        var permissionKey = $"{status.PluginId}|{status.Version}";
-        if (!string.Equals(
-                openedGenericPermissionKey,
-                permissionKey,
-                StringComparison.Ordinal))
+        if (!ReferenceEquals(openedGenericPermissionStatus, status))
         {
-            openedGenericPermissionKey = permissionKey;
+            openedGenericPermissionStatus = status;
             DactUi.OpenDialog(GenericPermissionPopupId);
         }
 
@@ -1765,12 +1761,18 @@ public sealed partial class ControlCenterWindow : Window
         if (installed is null) return false;
         var needsConsent = NeedsManualPluginConsent(installed);
         var enabled = installed.Enabled && !needsConsent;
-        var missing = new[] { "postnamazu", "triggernometry" }
-            .Where(id => !plugins.Any(plugin => plugin.Manifest.Id == id && plugin.Enabled)).ToArray();
+        var standalone = Version.TryParse(installed.DisplayVersion, out var simulantVersion) &&
+                         simulantVersion >= new Version(0, 4, 0, 0);
+        var missing = standalone
+            ? Array.Empty<string>()
+            : new[] { "postnamazu", "triggernometry" }
+                .Where(id => !plugins.Any(plugin => plugin.Manifest.Id == id && plugin.Enabled)).ToArray();
         var state = needsConsent ? (text.Get("未授权", "Not authorized"), PillTone.Warn, (string?)null) : ExtensionRunState("simulant", enabled);
         var note = state.Item3 ?? (missing.Length > 0
             ? text.Format($"请先安装并启用：{string.Join(", ", missing)}。", $"Install and enable first: {string.Join(", ", missing)}.")
-            : text.Get("本地机制模拟；与 PostNamazu、Triggernometry 一起运行。", "Local mechanic simulation; runs alongside PostNamazu and Triggernometry."));
+            : standalone
+                ? text.Get("本地机制模拟；自带游戏连接，需要 Simulant 原生内存权限。", "Local mechanic simulation; self-contained game bridge, requires Simulant native memory access.")
+                : text.Get("本地机制模拟；与 PostNamazu、Triggernometry 一起运行。", "Local mechanic simulation; runs alongside PostNamazu and Triggernometry."));
         var permissionsChanged = false;
         var toggled = DrawExtensionRow("extension-simulant", text.Get("仿生石 / Simulant", "Simulant"), installed, note,
             state.Item3 is not null || missing.Length > 0 ? ExtensionNoteColor(state.Item3 is not null ? state.Item2 : PillTone.Warn) : null,
@@ -1779,9 +1781,13 @@ public sealed partial class ControlCenterWindow : Window
         enabledChanged |= permissionsChanged;
         if (toggled is { } value) changed = enabledChanged = SetInstalledPluginEnabled(installed, value) || enabledChanged;
         if (ImGui.IsItemHovered())
-            DactUi.Tooltip(text.Get(
-                "初始化需要 Simulant 原生内存权限，以及 PostNamazu 游戏命令和原生内存权限。上游 v0.0.4.2 标注支持 7.55；当前游戏版本需以实际扫描结果和实机验证为准。",
-                "Initialization requires Simulant native memory access and PostNamazu game-command/native-memory access. Upstream v0.0.4.2 targets 7.55; other game builds require signature checks and in-game verification."));
+            DactUi.Tooltip(standalone
+                ? text.Get(
+                    "v0.4.0.0 起不再依赖 PostNamazu 或 Triggernometry，仅需授权 Simulant 原生内存权限；当前游戏版本需以实际扫描结果和实机验证为准。",
+                    "Starting with v0.4.0.0, Simulant no longer depends on PostNamazu or Triggernometry and requires only Simulant native memory access; check signature scan results and in-game verification for your game build.")
+                : text.Get(
+                    "初始化需要 Simulant 原生内存权限，以及 PostNamazu 游戏命令和原生内存权限。上游 v0.0.4.2 标注支持 7.55；当前游戏版本需以实际扫描结果和实机验证为准。",
+                    "Initialization requires Simulant native memory access and PostNamazu game-command/native-memory access. Upstream v0.0.4.2 targets 7.55; other game builds require signature checks and in-game verification."));
         return changed;
     }
 

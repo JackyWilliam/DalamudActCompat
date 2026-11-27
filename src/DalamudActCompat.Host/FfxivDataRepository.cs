@@ -208,11 +208,16 @@ internal sealed class FfxivDataRepository : IDataRepository
             return null!;
         }
 
+        return GetCachedGameProcessForAuthorizedBridge()!;
+    }
+
+    internal Process? GetCachedGameProcessForAuthorizedBridge()
+    {
         lock (syncRoot)
         {
             if (gameProcessId <= 0)
             {
-                return null!;
+                return null;
             }
 
             if (gameProcess is not null)
@@ -240,7 +245,7 @@ internal sealed class FfxivDataRepository : IDataRepository
             }
             catch (ArgumentException)
             {
-                return null!;
+                return null;
             }
         }
     }

@@ -1549,18 +1549,76 @@ public static partial class LegacyAssemblyRewriter
     private static void PreloadPostNamazuGreyMagicCompatibility(
         AssemblyDefinition postNamazu,
         AssemblyLoadContext loadContext)
+        => PreloadMixedModeGreyMagicCompatibility(
+            postNamazu,
+            loadContext,
+            "costura64.greymagic.dll",
+            "GreyMagic",
+            "postnamazu-greymagic",
+            "PostNamazu GreyMagic");
+
+    internal static void PreloadMixedModeGreyMagicCompatibility(
+        AssemblyDefinition container,
+        AssemblyLoadContext loadContext,
+        string resourceName,
+        string assemblyName,
+        string cacheFolderName,
+        string label)
     {
-        const string resourceName = "costura64.greymagic.dll";
         if (loadContext.Assemblies.Any(assembly => string.Equals(
                 assembly.GetName().Name,
-                "GreyMagic",
+                assemblyName,
                 StringComparison.OrdinalIgnoreCase)))
         {
             throw new InvalidOperationException(
-                "GreyMagic was loaded before the PostNamazu .NET compatibility shim.");
+                $"{assemblyName} was loaded before the {label} .NET compatibility shim.");
         }
 
-        var resource = postNamazu.MainModule.Resources
+        var image = RewriteMixedModeGreyMagicImage(container, resourceName, label);
+        var hash = Convert.ToHexString(SHA256.HashData(image));
+        var cacheDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "DalamudActCompat",
+            cacheFolderName);
+        Directory.CreateDirectory(cacheDirectory);
+        var assemblyPath = Path.Combine(cacheDirectory, $"{assemblyName}-{hash}.dll");
+        if (!File.Exists(assemblyPath))
+        {
+            var stagingPath = Path.Combine(
+                cacheDirectory,
+                $".{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
+            try
+            {
+                File.WriteAllBytes(stagingPath, image);
+                try
+                {
+                    File.Move(stagingPath, assemblyPath);
+                }
+                catch (IOException) when (File.Exists(assemblyPath))
+                {
+                    // Another Host finished writing the same content-addressed image.
+                }
+            }
+            finally
+            {
+                if (File.Exists(stagingPath))
+                {
+                    File.Delete(stagingPath);
+                }
+            }
+        }
+
+        _ = loadContext.LoadFromAssemblyPath(assemblyPath);
+        Console.WriteLine(
+            $"{label} EventWaitHandle ACL compatibility shim loaded.");
+    }
+
+    internal static byte[] RewriteMixedModeGreyMagicImage(
+        AssemblyDefinition container,
+        string resourceName,
+        string label)
+    {
+        var resource = container.MainModule.Resources
                            .OfType<EmbeddedResource>()
                            .SingleOrDefault(candidate => string.Equals(
                                candidate.Name,
@@ -1579,7 +1637,7 @@ public static partial class LegacyAssemblyRewriter
             originalNativeMethods == 0)
         {
             throw new InvalidOperationException(
-                "PostNamazu GreyMagic is no longer the expected mixed-mode native image.");
+                $"{label} is no longer the expected mixed-mode native image.");
         }
 
         using var definition = dnlib.DotNet.ModuleDefMD.Load(originalBytes);
@@ -1634,7 +1692,7 @@ public static partial class LegacyAssemblyRewriter
                     called.MethodSig?.Params.Count == 5))
         {
             throw new InvalidOperationException(
-                $"Unexpected PostNamazu GreyMagic EventWaitHandle shape: patched={patched}.");
+                $"Unexpected {label} EventWaitHandle shape: patched={patched}.");
         }
 
         using var output = new MemoryStream();
@@ -1669,49 +1727,14 @@ public static partial class LegacyAssemblyRewriter
                 rewrittenNativeMethods != originalNativeMethods)
             {
                 throw new InvalidOperationException(
-                    "PostNamazu GreyMagic native-image validation failed: " +
+                    $"{label} native-image validation failed: " +
                     $"legacy={legacyCalls}, replacement={replacementCalls}, " +
                     $"attributes={validation.MainModule.Attributes}/{originalAttributes}, " +
                     $"native={rewrittenNativeMethods}/{originalNativeMethods}.");
             }
         }
 
-        var hash = Convert.ToHexString(SHA256.HashData(image));
-        var cacheDirectory = Path.Combine(
-            Path.GetTempPath(),
-            "DalamudActCompat",
-            "postnamazu-greymagic");
-        Directory.CreateDirectory(cacheDirectory);
-        var assemblyPath = Path.Combine(cacheDirectory, $"GreyMagic-{hash}.dll");
-        if (!File.Exists(assemblyPath))
-        {
-            var stagingPath = Path.Combine(
-                cacheDirectory,
-                $".{Environment.ProcessId}-{Guid.NewGuid():N}.tmp");
-            try
-            {
-                File.WriteAllBytes(stagingPath, image);
-                try
-                {
-                    File.Move(stagingPath, assemblyPath);
-                }
-                catch (IOException) when (File.Exists(assemblyPath))
-                {
-                    // Another Host finished writing the same content-addressed image.
-                }
-            }
-            finally
-            {
-                if (File.Exists(stagingPath))
-                {
-                    File.Delete(stagingPath);
-                }
-            }
-        }
-
-        _ = loadContext.LoadFromAssemblyPath(assemblyPath);
-        Console.WriteLine(
-            "PostNamazu GreyMagic EventWaitHandle ACL compatibility shim loaded.");
+        return image;
     }
 
     private static int CountNativeMethods(ModuleDefinition module)
