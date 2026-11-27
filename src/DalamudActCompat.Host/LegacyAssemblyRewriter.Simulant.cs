@@ -10,16 +10,21 @@ public static partial class LegacyAssemblyRewriter
 {
     // The newest upstream build whose firewall, unload and start code the patches below were
     // written against (docs/simulant-compatibility.md).
-    internal static readonly Version LastAdaptedSimulantVersion = new(0, 1, 0, 0);
+    internal static readonly Version LastAdaptedSimulantVersion = new(0, 4, 0, 0);
 
     // v0.1.0.0 rebuilt the firewall around per-hook records, subscribes to process and zone
     // changes, updates itself and makes native calls through PostNamazu's call scheduler.
     // Builds before it keep the patches they were verified with.
     private static readonly Version FirstHookRecordSimulantVersion = new(0, 1, 0, 0);
+    private static readonly Version LastPostNamazuSimulantVersion = new(0, 1, 0, 0);
+
+    // v0.4.0.0 replaced PostNamazu / Triggernometry entity interop with its own mixed-mode
+    // SimuMagic assembly, disk EXE scanning, Lumina game data, and direct FFXIV_ACT_Plugin polling.
+    private static readonly Version FirstStandaloneSimulantVersion = new(0, 4, 0, 0);
 
     public static Assembly LoadSimulant(string assemblyPath, AssemblyLoadContext loadContext)
     {
-        using var output = RewriteSimulant(assemblyPath);
+        using var output = RewriteSimulant(assemblyPath, loadContext);
         return loadContext.LoadFromStream(output);
     }
 
@@ -28,6 +33,9 @@ public static partial class LegacyAssemblyRewriter
     /// new upstream build can be checked against them before any of its code runs.
     /// </summary>
     internal static MemoryStream RewriteSimulant(string assemblyPath)
+        => RewriteSimulant(assemblyPath, loadContext: null);
+
+    private static MemoryStream RewriteSimulant(string assemblyPath, AssemblyLoadContext? loadContext)
     {
         using var definition = AssemblyDefinition.ReadAssembly(assemblyPath);
         var module = definition.MainModule;
@@ -36,21 +44,32 @@ public static partial class LegacyAssemblyRewriter
             throw new InvalidDataException("Expected the upstream Simulant assembly.");
         }
 
-        // These patches edit upstream IL by its shape, so a build newer than the one they were
-        // written for fails at an arbitrary lookup with "Sequence contains no matching
-        // element". Say what is wrong and what works instead; nothing of it is loaded.
-        if (definition.Name.Version > LastAdaptedSimulantVersion)
+        // These patches edit upstream IL by its shape, so an unadapted build fails at an
+        // arbitrary lookup with "Sequence contains no matching element". Say what is wrong
+        // and what works instead; nothing of it is loaded.
+        if (definition.Name.Version > LastAdaptedSimulantVersion ||
+            (definition.Name.Version > LastPostNamazuSimulantVersion &&
+             definition.Name.Version < FirstStandaloneSimulantVersion))
         {
             throw new NotSupportedException(GetUnsupportedSimulantMessage(definition.Name.Version));
         }
 
-        // Preserve the upstream simulator and embedded CSVs, converting only legacy form
+        // Preserve the upstream simulator and embedded resources, converting only legacy form
         // resources. BinaryFormatter stays disabled throughout the shared Host.
         ConvertLegacyFormResources(module);
         var host = module.GetType("Simulant.Core.PluginHost")
                    ?? throw new TypeLoadException("Simulant.Core.PluginHost");
         var interop = module.GetType("Simulant.ACT.XivPluginInterop")
                       ?? throw new TypeLoadException("Simulant.ACT.XivPluginInterop");
+        if (definition.Name.Version >= FirstStandaloneSimulantVersion)
+        {
+            RewriteStandaloneSimulant(definition, module, host, interop, loadContext);
+            var standaloneOutput = new MemoryStream();
+            definition.Write(standaloneOutput);
+            standaloneOutput.Position = 0;
+            return standaloneOutput;
+        }
+
         var hookRecords = definition.Name.Version >= FirstHookRecordSimulantVersion;
         var attach = host.Methods.Single(method => method.Name == "Attach");
         var pluginField = interop.Fields.Single(field => field.Name == "plugin");
@@ -139,16 +158,7 @@ public static partial class LegacyAssemblyRewriter
                  }) startIl.InsertBefore(first, instruction);
 
         var zone = module.GetType("Simulant.Core.Zone.ZoneService");
-        var enter = zone.Methods.Single(method => method.Name == "TryEnterTerritory");
-        var enterIl = enter.Body.GetILProcessor();
-        var enterFirst = enter.Body.Instructions[0];
-        foreach (var instruction in new[]
-                 {
-                     Instruction.Create(OpCodes.Ldarg_0),
-                     Instruction.Create(OpCodes.Ldfld, zone.Fields.Single(field => field.Name == "_host")),
-                     Instruction.Create(OpCodes.Ldarg_1),
-                     Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantSimulationCompatibility).GetMethod(nameof(SimulantSimulationCompatibility.TraceLoad))!)),
-                 }) enterIl.InsertBefore(enterFirst, instruction);
+        PatchZoneTraceLoad(module, zone);
 
         var entityPointers = module.GetType("Simulant.ACT.TriggernometryInterop").Methods
             .Single(method => method.Name == "GetEntityPtrs");
@@ -164,6 +174,123 @@ public static partial class LegacyAssemblyRewriter
         definition.Write(output);
         output.Position = 0;
         return output;
+    }
+
+    // From v0.4.0.0: Simulant ships its own mixed-mode SimuMagic (renamed GreyMagic),
+    // scans the game EXE on disk, loads Lumina game data, and reads entities directly from
+    // GameObjectManager. It no longer requires PostNamazu or Triggernometry.
+    private static void RewriteStandaloneSimulant(
+        AssemblyDefinition definition,
+        ModuleDefinition module,
+        TypeDefinition host,
+        TypeDefinition interop,
+        AssemblyLoadContext? loadContext)
+    {
+        if (loadContext is not null)
+        {
+            PreloadMixedModeGreyMagicCompatibility(
+                definition,
+                loadContext,
+                "costura64.simumagic.dll",
+                "SimuMagic",
+                "simulant-simumagic",
+                "Simulant SimuMagic");
+        }
+        else
+        {
+            _ = RewriteMixedModeGreyMagicImage(
+                definition,
+                "costura64.simumagic.dll",
+                "Simulant SimuMagic");
+        }
+
+        var pluginField = interop.Fields.Single(field => field.Name == "plugin");
+        var refresh = host.Methods.Single(method => method.Name == "RefreshXivPlugin");
+        refresh.Body = new Mono.Cecil.Cil.MethodBody(refresh);
+        var refreshIl = refresh.Body.GetILProcessor();
+        // Upstream checks PluginStarted and subscribes to DataSubscription events on FFXIV_ACT_Plugin.
+        // DACT's shared facade does not start that plugin or wire DataSubscription for Simulant; bind
+        // XivPluginInterop.plugin directly and observe DACT's zone-change stream once per PluginHost
+        // while leaving _subscribedXivPlugin null so Dispose does not touch DataSubscription.
+        refreshIl.Emit(OpCodes.Ldarg_0);
+        refreshIl.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(
+            nameof(SimulantCompatibility.BindStandaloneFfxivPlugin))!));
+        refreshIl.Emit(OpCodes.Castclass, pluginField.FieldType);
+        refreshIl.Emit(OpCodes.Stsfld, pluginField);
+        refreshIl.Emit(OpCodes.Ret);
+
+        var readProcess = host.Methods.Single(method => method.Name == "ReadGameProcess");
+        readProcess.Body = new Mono.Cecil.Cil.MethodBody(readProcess);
+        var readProcessIl = readProcess.Body.GetILProcessor();
+        readProcessIl.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(
+            nameof(SimulantCompatibility.GetStandaloneGameProcess))!));
+        readProcessIl.Emit(OpCodes.Ret);
+
+        // UpdateGameProcess reads _subscribedXivPlugin to seed _entityZoneId. Redirect that single
+        // read to XivPluginInterop.plugin so _subscribedXivPlugin can remain null for Dispose.
+        var updateProcess = host.Methods.Single(method => method.Name == "UpdateGameProcess");
+        var subscribedReads = updateProcess.Body.Instructions
+            .Where(instruction => instruction.OpCode == OpCodes.Ldfld &&
+                                  instruction.Operand is FieldReference { Name: "_subscribedXivPlugin" })
+            .ToArray();
+        if (subscribedReads.Length != 1 || subscribedReads[0].Previous?.OpCode != OpCodes.Ldarg_0)
+        {
+            throw new InvalidDataException("Unexpected Simulant UpdateGameProcess plugin field layout.");
+        }
+
+        subscribedReads[0].Previous.OpCode = OpCodes.Nop;
+        subscribedReads[0].OpCode = OpCodes.Ldsfld;
+        subscribedReads[0].Operand = pluginField;
+
+        var retry = host.Methods.Single(method => method.Name == "RetryGameConnection");
+        var retryIl = retry.Body.GetILProcessor();
+        var retryFirst = retry.Body.Instructions[0];
+        retryIl.InsertBefore(retryFirst, Instruction.Create(OpCodes.Ldarg_0));
+        retryIl.InsertBefore(retryFirst, Instruction.Create(OpCodes.Call, module.ImportReference(
+            typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.WarnIfStandaloneNativeAccessDenied))!)));
+
+        var gameInterop = module.GetType("Simulant.Game.GameInterop")
+                          ?? throw new TypeLoadException("Simulant.Game.GameInterop");
+        var connect = gameInterop.Methods.Single(method => method.Name == "Connect");
+        connect.Body.GetILProcessor().InsertBefore(
+            connect.Body.Instructions[0],
+            Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(
+                nameof(SimulantCompatibility.EnsureStandaloneNativeAccess))!)));
+
+        var firewall = module.GetType("Simulant.Core.Firewall.FirewallService")
+                       ?? throw new TypeLoadException("Simulant.Core.Firewall.FirewallService");
+        var sendAddress = module.GetType("Simulant.Game.AddressStore")!
+            .Properties.Single(p => p.Name == "OnSendPacketFuncPtr").GetMethod;
+        PatchHookRecordFirewall(module, firewall, sendAddress, standalone: true);
+        DisableSimulantUpdater(module);
+        RedirectSimulantConfiguration(module, host);
+        PatchZoneTraceLoad(module, module.GetType("Simulant.Core.Zone.ZoneService")!);
+
+        var networkLog = module.GetType("Simulant.ACT.XivNetworkLog")
+                         ?? throw new TypeLoadException("Simulant.ACT.XivNetworkLog");
+        var writeLine = networkLog.Methods.Single(method => method.Name == "WriteLine");
+        writeLine.Body = new Mono.Cecil.Cil.MethodBody(writeLine);
+        var writeLineIl = writeLine.Body.GetILProcessor();
+        writeLineIl.Emit(OpCodes.Ldarg_0);
+        writeLineIl.Emit(OpCodes.Ldarg_1);
+        writeLineIl.Emit(OpCodes.Ldarg_2);
+        writeLineIl.Emit(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility).GetMethod(
+            nameof(SimulantCompatibility.WriteActNetworkLog))!));
+        writeLineIl.Emit(OpCodes.Ret);
+    }
+
+    private static void PatchZoneTraceLoad(ModuleDefinition module, TypeDefinition zone)
+    {
+        var enter = zone.Methods.Single(method => method.Name == "TryEnterTerritory");
+        var enterIl = enter.Body.GetILProcessor();
+        var enterFirst = enter.Body.Instructions[0];
+        foreach (var instruction in new[]
+                 {
+                     Instruction.Create(OpCodes.Ldarg_0),
+                     Instruction.Create(OpCodes.Ldfld, zone.Fields.Single(field => field.Name == "_host")),
+                     Instruction.Create(OpCodes.Ldarg_1),
+                     Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantSimulationCompatibility).GetMethod(nameof(SimulantSimulationCompatibility.TraceLoad))!)),
+                 }) enterIl.InsertBefore(enterFirst, instruction);
     }
 
     // Up to v0.0.4.2: the firewall keeps its state in fields of the service itself.
@@ -209,7 +336,11 @@ public static partial class LegacyAssemblyRewriter
     // send entry are adjusted; they do the same as the legacy patches above. Upstream still
     // copies the first 15 bytes into its cave and overwrites all 15 at the entry, which breaks
     // when Dalamud or another plugin already hooked that function.
-    private static void PatchHookRecordFirewall(ModuleDefinition module, TypeDefinition firewall, MethodDefinition sendAddress)
+    private static void PatchHookRecordFirewall(
+        ModuleDefinition module,
+        TypeDefinition firewall,
+        MethodDefinition sendAddress,
+        bool standalone = false)
     {
         var sendHook = firewall.Methods.Single(method => method.Name == "SendHookEnableCore");
         var sendIl = sendHook.Body.GetILProcessor();
@@ -220,12 +351,16 @@ public static partial class LegacyAssemblyRewriter
         var getAddress = Instruction.Create(OpCodes.Call, sendAddress);
         sendIl.InsertAfter(copiedEntry, getAddress);
         sendIl.InsertAfter(getAddress, Instruction.Create(OpCodes.Call, module.ImportReference(typeof(SimulantCompatibility)
-            .GetMethod(nameof(SimulantCompatibility.PrepareSendHookInstructions))!)));
+            .GetMethod(standalone
+                ? nameof(SimulantCompatibility.PrepareStandaloneSendHookInstructions)
+                : nameof(SimulantCompatibility.PrepareSendHookInstructions))!)));
 
         // state.Memory.AllocateMemory(0x100): the cave has to be within reach of a near jump.
         var allocation = sendHook.Body.Instructions.Single(instruction => instruction.Operand is MethodReference { Name: "AllocateMemory" });
         allocation.OpCode = OpCodes.Call;
-        allocation.Operand = module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.AllocateSendHookMemory))!);
+        allocation.Operand = module.ImportReference(typeof(SimulantCompatibility).GetMethod(standalone
+            ? nameof(SimulantCompatibility.AllocateStandaloneSendHookMemory)
+            : nameof(SimulantCompatibility.AllocateSendHookMemory))!);
 
         // WriteExact(state, target, patch.ToArray()): five bytes at the entry instead of 15.
         // WriteExact compares the count written with the array it was given, so it agrees.
@@ -236,13 +371,17 @@ public static partial class LegacyAssemblyRewriter
         var entryAddress = Instruction.Create(OpCodes.Call, sendAddress);
         sendIl.InsertAfter(patchArray, entryAddress);
         sendIl.InsertAfter(entryAddress, Instruction.Create(OpCodes.Call,
-            module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.PrepareSendEntryPatch))!)));
+            module.ImportReference(typeof(SimulantCompatibility).GetMethod(standalone
+                ? nameof(SimulantCompatibility.PrepareStandaloneSendEntryPatch)
+                : nameof(SimulantCompatibility.PrepareSendEntryPatch))!)));
 
         // Enable installs the receive hook first. Refuse an entry the relocation cannot
         // handle before anything is written, rather than rely on the rollback afterwards.
         var enable = firewall.Methods.Single(method => method.Name == "Enable" && method.Parameters.Count == 0);
         enable.Body.GetILProcessor().InsertBefore(enable.Body.Instructions[0], Instruction.Create(OpCodes.Call,
-            module.ImportReference(typeof(SimulantCompatibility).GetMethod(nameof(SimulantCompatibility.ValidateSendHookEntry))!)));
+            module.ImportReference(typeof(SimulantCompatibility).GetMethod(standalone
+                ? nameof(SimulantCompatibility.ValidateStandaloneSendHookEntry)
+                : nameof(SimulantCompatibility.ValidateSendHookEntry))!)));
     }
 
     // Upstream requires PostNamazu 1.3.6.7, a version number no official release carries yet.

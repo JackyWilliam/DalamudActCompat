@@ -1,6 +1,6 @@
 # Simulant（仿生石）兼容适配
 
-DACT 只提供用户自行导入的 Simulant 的运行时适配（0.4.3.0 起支持 v0.0.4.2，1.0.0.10 起增加 v0.1.0.0）。未安装时不显示入口、推荐或专属权限项；产品不下载、不捆绑 Simulant。
+DACT 只提供用户自行导入的 Simulant 的运行时适配（0.4.3.0 起支持 v0.0.4.2，1.0.0.10 起增加 v0.1.0.0，现已增加 v0.4.0.0）。未安装时不显示入口、推荐或专属权限项；产品不下载、不捆绑 Simulant。
 
 ## 用户手动导入
 
@@ -87,6 +87,32 @@ v0.1.0.0 要求邮差 1.3.6.7：检查程序集版本，并反射读取 `State` 
   全部经邮差的内存接口执行，只能在游戏内验证。
 - 上游主分支在 v0.1.0.0 之后又有十几个提交，引入 Lumina 读取游戏资源并删除了内嵌 CSV，下一个版本需要重新核对。
   v0.1.0.0 标签里没有许可证文件；主分支随后加入了 GPL-3.0 的 LICENSE。
+
+## v0.4.0.0（已适配，离线验证与本机游戏内实测通过）
+
+上游 v0.4.0.0（DLL 5,001,728 字节，SHA-256
+`9597A5497FFAB6F784B85883CED89D35CC37FF5FCA9CAE4E1F75DC7EF7C1CF5F`）不再依赖 PostNamazu 与 Triggernometry 的实体接口：
+改用自带的混合模式 `SimuMagic`（由 `GreyMagic` 改名而来，经 Costura 内嵌为 `costura64.simumagic.dll`）直接附加游戏进程，
+通过磁盘 EXE 扫描地址、Lumina 读取客户端游戏数据，并直接读取 `GameObjectManager` 实体表。
+
+DACT 按程序集版本（`0.4.0.0`）走独立适配分支，同时保留 `v0.0.4.2` 与 `v0.1.0.0` 的原有补丁；未核对的中间版本（`0.1.0.1`～`0.3.x`）与高于 `0.4.0.0` 的版本均在加载前拒绝并说明原因。
+
+| 位置 | v0.4.0.0 的做法 |
+| --- | --- |
+| `costura64.simumagic.dll` | 与 PostNamazu 的 `GreyMagic` 相同，`SimuMagic.Executor` 调用了 .NET Framework 专属的五参 `EventWaitHandle` 构造器。加载 Simulant 前先以 `dnlib` 改写为 `EventWaitHandleAcl.Create` 并预加载到同一 `AssemblyLoadContext` |
+| `PluginHost.RefreshXivPlugin` | 上游每秒轮询检查 `FFXIV_ACT_Plugin.PluginStarted` 与 `DataSubscription`。改为幂等绑定 `XivPluginInterop.plugin` 并通过 `SimulantCompatibility.ObserveZoneChanges` 接收 DACT 的切图通知；`_subscribedXivPlugin` 保持为 `null`，避免 `Dispose` 访问空 `DataSubscription` |
+| `PluginHost.ReadGameProcess` / `UpdateGameProcess` / `RetryGameConnection` | 读取游戏进程改为走 `SimulantCompatibility.GetStandaloneGameProcess`（仅校验 `simulant` 自身的 `NativeGameMemory` 权限，不再要求 PostNamazu 权限）；`UpdateGameProcess` 中的 `_subscribedXivPlugin` 改为读取 `XivPluginInterop.plugin`；未授权时点击重试连接写入提示日志 |
+| `GameInterop.Connect` | 入口加入 `SimulantCompatibility.EnsureStandaloneNativeAccess` 权限校验，未授权时禁止附加游戏进程 |
+| `FirewallService.SendHookEnableCore` / `Enable` | 沿用 v0.1.0.0 的三处短跳与就近代码洞补丁及前置校验，但内存读取与进程句柄改为走 Simulant 自身的 `GameInterop.Connection.Memory` 与独立权限门禁，不再依赖 PostNamazu |
+| `XivNetworkLog.WriteLine` | 上游通过反射读取 `FFXIV_ACT_Plugin._iocContainer` 写入模拟战斗日志；改为按 `FFXIV_ACT_Plugin` 的 `ParseMediator.BeforeLogLineRead` 格式（`[HH:mm:ss.fff] <LogMessageType> <HexId>:<payload>`）直接派发到 Host 的 `FormActMain.ParseRawLogLine`，供同 Host 内的 Triggernometry 触发，同时不污染真实 `Network_*.log` |
+| `PluginUpdater.RunAsync` / `PluginHost` 配置路径 / `ZoneService.TryEnterTerritory` | 沿用 v0.1.0.0 的做法：禁用自更新、配置目录重定向到 ACT 数据目录、保留区域加载追踪日志 |
+
+### 已知情况与验证记录（v0.4.0.0）
+
+- 权限仅需授予 Simulant 的「原生游戏内存」，不再要求 PostNamazu 或 Triggernometry。
+- Host 在仅启用 Simulant（未启用 Triggernometry）时也会挂载空的 `BeforeLogLineRead` 订阅，确保 `/e sim ...` 默语命令能通过 `OnLogLineRead` 到达 `SimCommandListener`。
+- 2026-11-27 本机游戏内实测（Debug 构建加载 `Simulant.dll` v0.4.0.0）：成功完成弹窗授权、预加载 `SimuMagic` ACL 垫片、保存配置至 DACT 的 `Config\Simulant.config.xml`、加载区域 1122 / 1238 并运行预设模拟（如 U7a P13 / P22），期间无 Simulant 报错或闪退。
+- `GenerateActLogs`（实验性模拟 ACT 日志）在离线冒烟中已验证按 `ParseMediator` 格式派发至 `FormActMain.OnLogLineRead`，尚未在游戏内实测开启该选项后的触发器联动。
 
 ## 维护者验证
 

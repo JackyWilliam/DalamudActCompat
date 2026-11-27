@@ -1,5 +1,7 @@
 using Advanced_Combat_Tracker;
 using System.Buffers.Binary;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.ExceptionServices;
@@ -16,6 +18,8 @@ public static class SimulantCompatibility
     // The zone handler of the loaded Simulant (v0.1.0.0 and later), if any. One slot: a
     // reloaded plugin replaces its predecessor, whose handler ignores calls once disposed.
     private static Action<uint, string>? zoneChanged;
+    private static WeakReference<object>? observedStandaloneHost;
+    private static readonly object StandaloneHostGate = new();
 
     /// <summary>
     /// Stands in for the FFXIV plugin's ZoneChanged subscription, which upstream makes only
@@ -32,6 +36,34 @@ public static class SimulantCompatibility
         type.GetField("_entityZoneId", BindingFlags.Instance | BindingFlags.NonPublic)
             ?.SetValue(pluginHost, HostPluginBridge.FfxivRepository.GetCurrentTerritoryID());
         Volatile.Write(ref zoneChanged, handler.CreateDelegate<Action<uint, string>>(pluginHost));
+    }
+
+    /// <summary>
+    /// Idempotent replacement for Simulant v0.4.0.0+ RefreshXivPlugin, which runs in a 1-second
+    /// loop and expects PluginStarted and DataSubscription on FFXIV_ACT_Plugin.
+    /// </summary>
+    public static object? BindStandaloneFfxivPlugin(object pluginHost)
+    {
+        var disposed = (bool?)pluginHost.GetType()
+            .GetProperty("Disposed", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?
+            .GetValue(pluginHost) == true;
+        if (disposed)
+        {
+            return null;
+        }
+
+        lock (StandaloneHostGate)
+        {
+            if (observedStandaloneHost is null ||
+                !observedStandaloneHost.TryGetTarget(out var current) ||
+                !ReferenceEquals(current, pluginHost))
+            {
+                ObserveZoneChanges(pluginHost);
+                observedStandaloneHost = new WeakReference<object>(pluginHost);
+            }
+        }
+
+        return GetFfxivPlugin();
     }
 
     /// <summary>Called by the Host for every zone change the game reports.</summary>
@@ -75,6 +107,66 @@ public static class SimulantCompatibility
         }
     }
 
+    public static void EnsureStandaloneNativeAccess()
+    {
+        if (!HostPluginBridge.IsSimulantStandaloneNativeRuntimeAllowed())
+        {
+            throw new InvalidOperationException(
+                "请在 DACT 扩展权限中授权 Simulant 的原生内存访问，然后重启 Host。");
+        }
+    }
+
+    public static Process? GetStandaloneGameProcess()
+        => HostPluginBridge.IsSimulantStandaloneNativeRuntimeAllowed()
+            ? HostPluginBridge.FfxivRepository.GetCachedGameProcessForAuthorizedBridge()
+            : null;
+
+    public static void WarnIfStandaloneNativeAccessDenied(object pluginHost)
+    {
+        if (HostPluginBridge.IsSimulantStandaloneNativeRuntimeAllowed())
+        {
+            return;
+        }
+
+        pluginHost.GetType()
+            .GetMethod("LogWarning", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?
+            .Invoke(pluginHost, ["请在 DACT 扩展权限中授权 Simulant 的原生内存访问，然后重启 Host。"]);
+    }
+
+    private static readonly Lazy<Type?> LogMessageTypeEnum = new(() =>
+        Type.GetType("FFXIV_ACT_Plugin.Logfile.LogMessageType, FFXIV_ACT_Plugin.Logfile", throwOnError: false));
+
+    public static void WriteActNetworkLog(int id, string payload, DateTimeOffset? timestamp)
+    {
+        if (payload is null)
+        {
+            throw new ArgumentNullException(nameof(payload));
+        }
+
+        if (payload.IndexOf('\r') >= 0 || payload.IndexOf('\n') >= 0)
+        {
+            throw new ArgumentException("网络日志内容必须在同一行。", nameof(payload));
+        }
+
+        var actMain = ActGlobals.oFormActMain
+                      ?? throw new InvalidOperationException("ACT 主窗口尚未就绪。");
+        var time = timestamp?.LocalDateTime ?? DateTime.Now;
+        var typeName = LogMessageTypeEnum.Value is { } enumType
+            ? Enum.ToObject(enumType, id).ToString()
+            : id.ToString(CultureInfo.InvariantCulture);
+        var sanitized = payload.Replace('\0', ' ').Replace('|', ':');
+        // Match FFXIV_ACT_Plugin's ParseMediator.BeforeLogLineRead output so Host-side
+        // Triggernometry triggers match simulated events without writing to Network_*.log.
+        var line = string.Format(
+            CultureInfo.InvariantCulture,
+            "[{0:HH:mm:ss.fff}] {1} {2:X2}:{3}",
+            time,
+            typeName,
+            id,
+            sanitized);
+        actMain.ParseRawLogLine(false, time, line);
+    }
+
     public static Dictionary<string, string> ValidateSignatures(Dictionary<string, string> result)
     {
         SimulantEntryPointCompatibility.Recover(result);
@@ -92,41 +184,91 @@ public static class SimulantCompatibility
     public static byte[] PrepareSendHookInstructions(byte[] savedEntry, IntPtr address)
     {
         EnsureNativeAccess();
+        return PrepareSendHookInstructionsCore(savedEntry, address, SimulantEntryPointCompatibility.ReadMemory);
+    }
+
+    public static byte[] PrepareStandaloneSendHookInstructions(byte[] savedEntry, IntPtr address)
+    {
+        EnsureStandaloneNativeAccess();
+        return PrepareSendHookInstructionsCore(savedEntry, address, SimulantEntryPointCompatibility.ReadStandaloneMemory);
+    }
+
+    private static byte[] PrepareSendHookInstructionsCore(
+        byte[] savedEntry,
+        IntPtr address,
+        Func<IntPtr, int, byte[]> read)
+    {
         if (savedEntry.Length != 15) throw new InvalidOperationException("发包入口备份长度无效。");
         // These three stack-relative moves are the upstream send hook's only supported
         // unmodified prologue. Preserve the saved bytes separately for exact restoration.
         if (savedEntry.AsSpan().SequenceEqual(new byte[]
             { 0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x4C, 0x89, 0x64, 0x24, 0x18 }))
             return savedEntry;
-        return SimulantEntryPointCompatibility.RelocateJump(savedEntry, address, SimulantEntryPointCompatibility.ReadMemory);
+        return SimulantEntryPointCompatibility.RelocateJump(savedEntry, address, read);
     }
 
     public static void ValidateSendHookEntry()
     {
         EnsureNativeAccess();
+        ValidateSendHookEntryCore(SimulantEntryPointCompatibility.ReadMemory);
+    }
+
+    public static void ValidateStandaloneSendHookEntry()
+    {
+        EnsureStandaloneNativeAccess();
+        ValidateSendHookEntryCore(SimulantEntryPointCompatibility.ReadStandaloneMemory);
+    }
+
+    private static void ValidateSendHookEntryCore(Func<IntPtr, int, byte[]> read)
+    {
         var assembly = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "Simulant");
         var address = (IntPtr)assembly.GetType("Simulant.Game.AddressStore")!
             .GetProperty("OnSendPacketFuncPtr")!.GetValue(null)!;
         if (address == IntPtr.Zero) throw new InvalidOperationException("发包函数尚未就绪。");
         // Check before upstream disables receiving packets, so an unsupported send entry
         // cannot leave only half of the firewall enabled.
-        _ = PrepareSendHookInstructions(SimulantEntryPointCompatibility.ReadMemory(address, 15), address);
+        _ = PrepareSendHookInstructionsCore(read(address, 15), address, read);
     }
 
     public static IntPtr AllocateSendHookMemory(object memory, int size)
     {
         EnsureNativeAccess();
+        return AllocateSendHookMemoryCore(
+            HostPluginBridge.FfxivRepository.GetCurrentFFXIVProcess(),
+            size);
+    }
+
+    public static IntPtr AllocateStandaloneSendHookMemory(object memory, int size)
+    {
+        EnsureStandaloneNativeAccess();
+        return AllocateSendHookMemoryCore(
+            HostPluginBridge.FfxivRepository.GetCachedGameProcessForAuthorizedBridge(),
+            size);
+    }
+
+    private static IntPtr AllocateSendHookMemoryCore(Process? process, int size)
+    {
         var assembly = AppDomain.CurrentDomain.GetAssemblies().Single(a => a.GetName().Name == "Simulant");
         var address = (IntPtr)assembly.GetType("Simulant.Game.AddressStore")!
             .GetProperty("OnSendPacketFuncPtr")!.GetValue(null)!;
-        var process = HostPluginBridge.FfxivRepository.GetCurrentFFXIVProcess()
-                      ?? throw new InvalidOperationException("游戏进程尚未就绪。");
-        return SimulantNearMemory.Allocate(process.Handle, address, size);
+        var activeProcess = process ?? throw new InvalidOperationException("游戏进程尚未就绪。");
+        return SimulantNearMemory.Allocate(activeProcess.Handle, address, size);
     }
 
     public static byte[] PrepareSendEntryPatch(byte[] upstreamPatch, IntPtr entry)
     {
         EnsureNativeAccess();
+        return PrepareSendEntryPatchCore(upstreamPatch, entry);
+    }
+
+    public static byte[] PrepareStandaloneSendEntryPatch(byte[] upstreamPatch, IntPtr entry)
+    {
+        EnsureStandaloneNativeAccess();
+        return PrepareSendEntryPatchCore(upstreamPatch, entry);
+    }
+
+    private static byte[] PrepareSendEntryPatchCore(byte[] upstreamPatch, IntPtr entry)
+    {
         if (upstreamPatch.Length != 15 || !upstreamPatch.AsSpan(0, 6).SequenceEqual(new byte[] { 0xFF, 0x25, 0, 0, 0, 0 }))
             throw new InvalidDataException("发包入口补丁格式与适配版本不一致。");
         return SimulantNearMemory.CreateEntryPatch(entry,

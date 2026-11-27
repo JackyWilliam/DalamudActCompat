@@ -35,9 +35,21 @@ internal static class SimulantSmokeTests
             SetPermissions(mask);
             Assert(HostPluginBridge.IsSimulantNativeRuntimeAllowed() == (mask == 7),
                 "Simulant must require its own memory grant and both PostNamazu native grants.");
+            Assert(HostPluginBridge.IsSimulantStandaloneNativeRuntimeAllowed() == ((mask & 1) != 0),
+                "Standalone Simulant must require only its own native memory grant.");
             if (mask != 7)
             {
                 Throws(SimulantCompatibility.EnsureNativeAccess, "授权");
+            }
+            if ((mask & 1) == 0)
+            {
+                Throws(SimulantCompatibility.EnsureStandaloneNativeAccess, "授权");
+                Assert(SimulantCompatibility.GetStandaloneGameProcess() is null,
+                    "Denied standalone Simulant unexpectedly received a game process.");
+            }
+            else
+            {
+                SimulantCompatibility.EnsureStandaloneNativeAccess();
             }
         }
         var success = new Dictionary<string, string> { ["Resolved"] = null! };
@@ -68,18 +80,18 @@ internal static class SimulantSmokeTests
                 return path;
             }
             var context = new System.Runtime.Loader.AssemblyLoadContext("simulant-version-guard", isCollectible: true);
-            foreach (var newer in new[] { new Version(0, 1, 0, 1), new Version(0, 2, 0, 0), new Version(1, 0, 0, 0) })
+            foreach (var unsupported in new[] { new Version(0, 1, 0, 1), new Version(0, 2, 0, 0), new Version(0, 3, 0, 0), new Version(0, 4, 0, 1), new Version(0, 5, 0, 0), new Version(1, 0, 0, 0) })
             {
-                var newerPath = Write(newer);
+                var unsupportedPath = Write(unsupported);
                 try
                 {
-                    LegacyAssemblyRewriter.LoadSimulant(newerPath, context);
-                    throw new InvalidOperationException($"Simulant {newer} was not refused.");
+                    LegacyAssemblyRewriter.LoadSimulant(unsupportedPath, context);
+                    throw new InvalidOperationException($"Simulant {unsupported} was not refused.");
                 }
                 catch (NotSupportedException refused)
                 {
-                    Assert(refused.Message.Contains($"v{newer}", StringComparison.Ordinal) &&
-                           refused.Message.Contains("v0.1.0.0", StringComparison.Ordinal) &&
+                    Assert(refused.Message.Contains($"v{unsupported}", StringComparison.Ordinal) &&
+                           refused.Message.Contains("v0.4.0.0", StringComparison.Ordinal) &&
                            refused.Message.Contains("尚未适配", StringComparison.Ordinal),
                         "The refusal must name the imported version, the adapted version and the reason.");
                 }
@@ -87,7 +99,7 @@ internal static class SimulantSmokeTests
             Assert(!context.Assemblies.Any(), "A refused Simulant build must not be loaded.");
             // The adapted version and older ones still reach the rewriter itself: these empty
             // fixtures stop at its first type lookup, not at the version message.
-            foreach (var adapted in new[] { new Version(0, 1, 0, 0), new Version(0, 0, 4, 2), new Version(0, 0, 4, 1) })
+            foreach (var adapted in new[] { new Version(0, 4, 0, 0), new Version(0, 1, 0, 0), new Version(0, 0, 4, 2), new Version(0, 0, 4, 1) })
             {
                 try
                 {
@@ -118,6 +130,7 @@ internal static class SimulantSmokeTests
         using var definition = Mono.Cecil.AssemblyDefinition.ReadAssembly(rewritten);
         var module = definition.MainModule;
         var version = definition.Name.Version;
+        var standalone = version >= new Version(0, 4, 0, 0);
         var hookRecords = version >= new Version(0, 1, 0, 0);
         var checks = 0;
         Mono.Cecil.MethodDefinition Method(string type, string name)
@@ -129,6 +142,55 @@ internal static class SimulantSmokeTests
         {
             Assert(condition, $"Simulant {version}: {message}");
             checks++;
+        }
+
+        if (standalone)
+        {
+            var refresh = Method("Simulant.Core.PluginHost", "RefreshXivPlugin");
+            Check(Calls(refresh, nameof(SimulantCompatibility.BindStandaloneFfxivPlugin)) == 1 &&
+                  refresh.Body.Instructions.Count == 5,
+                "RefreshXivPlugin was not replaced by the standalone FFXIV binding.");
+            var readProcess = Method("Simulant.Core.PluginHost", "ReadGameProcess");
+            Check(Calls(readProcess, nameof(SimulantCompatibility.GetStandaloneGameProcess)) == 1 &&
+                  readProcess.Body.Instructions.Count == 2,
+                "ReadGameProcess was not routed through the Simulant native-memory gate.");
+            var updateProcess = Method("Simulant.Core.PluginHost", "UpdateGameProcess");
+            Check(updateProcess.Body.Instructions.All(instruction =>
+                    instruction.Operand is not Mono.Cecil.FieldReference { Name: "_subscribedXivPlugin" }),
+                "UpdateGameProcess still reads _subscribedXivPlugin.");
+            var retry = Method("Simulant.Core.PluginHost", "RetryGameConnection");
+            Check(Calls(retry, nameof(SimulantCompatibility.WarnIfStandaloneNativeAccessDenied)) == 1,
+                "RetryGameConnection does not warn when native memory permission is denied.");
+            var connect = Method("Simulant.Game.GameInterop", "Connect");
+            Check(connect.Body.Instructions[0].Operand is Mono.Cecil.MethodReference { Name: nameof(SimulantCompatibility.EnsureStandaloneNativeAccess) },
+                "GameInterop.Connect does not start with the standalone permission check.");
+            var standaloneSend = Method("Simulant.Core.Firewall.FirewallService", "SendHookEnableCore");
+            Check(Calls(standaloneSend, nameof(SimulantCompatibility.PrepareStandaloneSendHookInstructions)) == 1 &&
+                  Calls(standaloneSend, nameof(SimulantCompatibility.AllocateStandaloneSendHookMemory)) == 1 &&
+                  Calls(standaloneSend, nameof(SimulantCompatibility.PrepareStandaloneSendEntryPatch)) == 1 &&
+                  Calls(standaloneSend, "AllocateMemory") == 0,
+                "The standalone send hook is missing one of its three entry patches.");
+            var standaloneEnable = module.GetType("Simulant.Core.Firewall.FirewallService").Methods
+                .Single(method => method.Name == "Enable" && method.Parameters.Count == 0);
+            Check(standaloneEnable.Body.Instructions[0].Operand is Mono.Cecil.MethodReference { Name: nameof(SimulantCompatibility.ValidateStandaloneSendHookEntry) } &&
+                  Calls(standaloneEnable, "EnableWithRollback") == 1,
+                "Enable lost the standalone entry check or upstream rollback.");
+            var updater = module.GetType("Simulant.Core.PluginUpdater").Methods.Single(method => method.Name == "RunAsync");
+            Check(updater.Body.Instructions.Count == 2 && Calls(updater, "get_CompletedTask") == 1,
+                "The self-updater can still run.");
+            var constructors = module.GetType("Simulant.Core.PluginHost").Methods
+                .Where(method => method.IsConstructor && method.HasBody).ToArray();
+            Check(constructors.Sum(method => Calls(method, "get_StartupPath")) == 0 &&
+                  constructors.Sum(method => Calls(method, nameof(SimulantCompatibility.GetConfigurationRoot))) == 1,
+                "The configuration file is still under the application folder.");
+            Check(Calls(Method("Simulant.Core.Zone.ZoneService", "TryEnterTerritory"), nameof(SimulantSimulationCompatibility.TraceLoad)) == 1,
+                "Loading a territory is not traced.");
+            var writeLine = Method("Simulant.ACT.XivNetworkLog", "WriteLine");
+            Check(Calls(writeLine, nameof(SimulantCompatibility.WriteActNetworkLog)) == 1 &&
+                  writeLine.Body.Instructions.Count == 5,
+                "XivNetworkLog.WriteLine was not bridged to Host ACT logs.");
+            Console.WriteLine($"Simulant {version} static rewrite: {checks} checks passed; the assembly was not loaded.");
+            return;
         }
 
         var attach = Method("Simulant.Core.PluginHost", "Attach");
@@ -230,6 +292,49 @@ internal static class SimulantSmokeTests
             var hostType = assembly.GetType("Simulant.Core.PluginHost")!;
             var host = hostType.GetProperty("Instance")!.GetValue(null)!;
             var internalInstance = BindingFlags.Instance | BindingFlags.NonPublic;
+            var isStandalone = assembly.GetName().Version >= new Version(0, 4, 0, 0);
+            if (isStandalone)
+            {
+                Assert(AppDomain.CurrentDomain.GetAssemblies().Any(a => a.GetName().Name == "SimuMagic"),
+                    "Preloaded SimuMagic compatibility shim was not loaded.");
+                var configPath = (string)hostType.GetProperty("ConfigurationPath", internalInstance)!.GetValue(host)!;
+                Assert(configPath.StartsWith(Path.Combine(root, "config"), StringComparison.OrdinalIgnoreCase),
+                    $"Standalone Simulant configuration path escaped Host config root: {configPath}");
+                Assert(!(bool)hostType.GetProperty("PluginReady", internalInstance)!.GetValue(host)!,
+                    "Loading standalone Simulant without a game PID must not mark PluginReady.");
+                Assert(!(bool)hostType.GetProperty("FirewallEnabled", internalInstance)!.GetValue(host)!,
+                    "Loading standalone Simulant must not enable its firewall.");
+                var gameInterop = assembly.GetType("Simulant.Game.GameInterop")!;
+                var connect = gameInterop.GetMethod("Connect", BindingFlags.Static | BindingFlags.NonPublic)!;
+                Throws(() => connect.Invoke(null, [null, IntPtr.Zero, null, null]), "授权");
+                var receivedLogs = new List<string>();
+                void OnLine(bool isImport, LogLineEventArgs args) => receivedLogs.Add(args.logLine);
+                ActGlobals.oFormActMain.OnLogLineRead += OnLine;
+                try
+                {
+                    var networkLog = assembly.GetType("Simulant.ACT.XivNetworkLog")!;
+                    networkLog.GetMethod("WriteLine", BindingFlags.Static | BindingFlags.NonPublic)!
+                        .Invoke(null, [20, "40000001|Simulant|0001|Test", null]);
+                    Assert(receivedLogs.Any(line => line.Contains("] StartsCasting 14:40000001:Simulant:0001:Test", StringComparison.Ordinal)),
+                        $"Bridged XivNetworkLog.WriteLine did not emit ACT ParseMediator format: {string.Join(" | ", receivedLogs)}");
+                }
+                finally
+                {
+                    ActGlobals.oFormActMain.OnLogLineRead -= OnLine;
+                }
+
+                // Wait briefly for WatchGameProcessAsync to settle one poll cycle against our facade.
+                Thread.Sleep(200);
+                var xInterop = assembly.GetType("Simulant.ACT.XivPluginInterop")!;
+                Assert(xInterop.GetField("plugin", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null) is not null,
+                    "WatchGameProcessAsync did not bind XivPluginInterop.plugin.");
+                runtime.Dispose();
+                Assert((bool)hostType.GetProperty("Disposed")!.GetValue(host)!, "Original Dispose was skipped.");
+                Assert(hostType.GetProperty("Instance")!.GetValue(null) is null, "Original plugin instance survived unload.");
+                Assert(!errors.ToString().Contains("DeInit failed", StringComparison.Ordinal), errors.ToString());
+                Console.WriteLine("PASS: Standalone Simulant v0.4.0.0+ SimuMagic shim, config redirect, permission gate, ACT log bridge, and unload.");
+                return;
+            }
             var csvReady = hostType.GetProperty("CsvReady", internalInstance)!;
             var deadline = DateTime.UtcNow.AddSeconds(20);
             while (!(bool)csvReady.GetValue(host)! && DateTime.UtcNow < deadline) Thread.Sleep(50);

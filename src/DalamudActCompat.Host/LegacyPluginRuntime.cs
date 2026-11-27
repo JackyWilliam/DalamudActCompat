@@ -235,6 +235,12 @@ internal sealed class LegacyPluginRuntime : IDisposable
         }
 
         SetStage("postnamazu", "Log system", "success", "Bounded IPC log batches route through FormActMain.");
+        if (allowedPluginIds.Contains("simulant"))
+        {
+            // NotACT requires a BeforeLogLineRead subscriber before it dispatches OnLogLineRead.
+            // Simulant v0.4.0.0+ can run without Triggernometry and listens on OnLogLineRead.
+            actMain!.BeforeLogLineRead += OnGenericLogLine;
+        }
         RegisterOverlayPluginIdentity();
         TryLoad(
             "triggernometry",
@@ -427,7 +433,7 @@ internal sealed class LegacyPluginRuntime : IDisposable
         {
             actMain.BeforeLogLineRead -= OnMatchaLogLine;
         }
-        if (genericOnly && actMain is not null)
+        if ((genericOnly || (!matchaOnly && allowedPluginIds.Contains("simulant"))) && actMain is not null)
         {
             actMain.BeforeLogLineRead -= OnGenericLogLine;
         }
